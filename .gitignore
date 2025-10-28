@@ -1,0 +1,15 @@
+# Чувствительные данные
+.env
+*.env
+
+# База данных
+*.db
+users.db
+
+# Кэш Python
+__pycache__/
+*.pyc
+
+# Системные файлы
+.DS_Store
+Thumbs.db
