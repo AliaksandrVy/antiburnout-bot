@@ -28,20 +28,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db.add_user(user.id, user.username, user.first_name)
     
     welcome_text = f"""
-🌿 *Добро пожаловать, {user.first_name}\!* 🌿
+🌿 Добро пожаловать, {user.first_name}! 🌿
 
-💫 *Anti\-Burnout Bot* \- твой персональный помощник против стресса и выгорания
+💫 Anti-Burnout Bot - твой персональный помощник против стресса и выгорания
 
-🎯 *Что я умею:*
-• 📅 *Техника дня* \- уникальная практика каждый день
-• 🎲 *Случайная техника* \- помощь когда нужно прямо сейчас  
-• 🌬️ *Дыхание* \- успокоение за 1 минуту
-• 🏃 *Микро\-упражнения* \- без специального оборудования
-• 🧠 *Ментальные практики* \- перезагрузка сознания
+🎯 Что я умею:
+• 📅 Техника дня - уникальная практика каждый день
+• 🎲 Случайная техника - помощь когда нужно прямо сейчас  
+• 🌬️ Дыхание - успокоение за 1 минуту
+• 🏃 Микро-упражнения - без специального оборудования
+• 🧠 Ментальные практики - перезагрузка сознания
 
-⏱ *Все техники занимают 1\-3 минуты* \- идеально для коротких перерывов
+⏱ Все техники занимают 1-3 минуты - идеально для коротких перерывов
 
-*Выбери действие ниже:* 👇
+Выбери действие ниже: 👇
 """
     
     keyboard = [
@@ -57,8 +57,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         welcome_text,
-        reply_markup=reply_markup,
-        parse_mode='MarkdownV2'
+        reply_markup=reply_markup
     )
 
 def format_technique(tech):
@@ -72,16 +71,16 @@ def format_technique(tech):
     steps = "\n".join([f"🔹 {step}" for step in tech['steps']])
     
     return f"""
-{emoji} *{tech['name']}*
+{emoji} {tech['name']}
 
-_{tech['description']}_
+{tech['description']}
 
-📋 *Шаги:*
+📋 Шаги:
 {steps}
 
-💡 *Совет:* {tech['tip']}
+💡 Совет: {tech['tip']}
 
-*⏱ 1\-3 минуты • {tech['type'].title()} • Anti\-Burnout Bot* 🌿
+⏱ 1-3 минуты • {tech['type'].title()} • Anti-Burnout Bot 🌿
 """
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -90,25 +89,23 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if query.data == "subscribe":
         subscribe_text = """
-💎 *Премиум подписка Anti\-Burnout Bot*
+💎 Премиум подписка Anti-Burnout Bot
 
-*🚀 Что входит:*
+🚀 Что входит:
 ✅ Ежедневная техника в 11:00
 ✅ Доступ ко всем 31 техникам  
 ✅ Персональные рекомендации
 ✅ Приоритетная поддержка
 ✅ Статистика прогресса
 
-*💰 Стоимость:* $1 за 30 дней
+💰 Стоимость: $1 за 30 дней
 
-*🎁 Пробный период:* 3 дня бесплатно
+🎁 Пробный период: 3 дня бесплатно
 
-*💳 *Автоматическая оплата временно отключена*
+💳 Для оформления подписки напишите: @AliaksandrVy
+Тема: "ПОДПИСКА ANTI-BURNOUT"
 
-*Для оформления подписки напишите:* @AliaksandrVy
-*Тема:* "ПОДПИСКА ANTI\-BURNOUT"
-
-*🔜 Скоро появится автоматическая оплата через ЮKassa* 🔄
+🔜 Скоро появится автоматическая оплата 🔄
 """
         keyboard = [
             [InlineKeyboardButton("📨 Написать для подписки", url="https://t.me/AliaksandrVy")],
@@ -118,8 +115,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await query.edit_message_text(
             subscribe_text,
-            reply_markup=reply_markup,
-            parse_mode='MarkdownV2'
+            reply_markup=reply_markup
         )
         
     elif query.data == "back_to_menu":
@@ -127,87 +123,88 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     elif query.data == "sample":
         technique = techniques[0]
-        text = "💆 *Пример техники:*\n" + format_technique(technique)
-        await query.edit_message_text(text, parse_mode='MarkdownV2')
+        text = "💆 Пример техники:\n" + format_technique(technique)
+        await query.edit_message_text(text)
         
     elif query.data == "random":
         technique = random.choice(techniques)
-        text = "🎲 *Случайная техника:*\n" + format_technique(technique)
-        await query.edit_message_text(text, parse_mode='MarkdownV2')
+        text = "🎲 Случайная техника:\n" + format_technique(technique)
+        await query.edit_message_text(text)
         
     elif query.data == "today":
         day_of_month = datetime.datetime.now().day
         technique_index = (day_of_month - 1) % len(techniques)
         today_technique = techniques[technique_index]
         
-        text = f"📅 *Техника на сегодня \({datetime.datetime.now().strftime('%d\.%m\.%Y')}\):*\n" + format_technique(today_technique)
-        await query.edit_message_text(text, parse_mode='MarkdownV2')
+        date_str = datetime.datetime.now().strftime('%d.%m.%Y')
+        text = f"📅 Техника на сегодня ({date_str}):\n" + format_technique(today_technique)
+        await query.edit_message_text(text)
         
     elif query.data == "help":
         help_text = """
-🆘 *Помощь по боту*
+🆘 Помощь по боту
 
-*📅 Техника на сегодня* \- уникальная практика на каждый день месяца
-*🎯 Случайная техника* \- случайный выбор из всех техник  
-*💆 Пример техники* \- посмотри как это работает
+📅 Техника на сегодня - уникальная практика на каждый день месяца
+🎯 Случайная техника - случайный выбор из всех техник  
+💆 Пример техники - посмотри как это работает
 
-*💰 Подписка:*
+💰 Подписка:
 • 3 дня бесплатно
 • Затем $1 за 30 дней
 • Ежедневные техники в 11:00
 
-*💡 Совет:* Используйте бота при первых признаках стресса \- не ждите выгорания\!
+💡 Совет: Используйте бота при первых признаках стресса - не ждите выгорания!
 
-*По вопросам и предложениям:* @AliaksandrVy
+По вопросам и предложениям: @AliaksandrVy
 
-*Доступные команды:*
-/start \- главное меню
-/help \- помощь  
-/stats \- ваша статистика
-/about \- о проекте
+Доступные команды:
+/start - главное меню
+/help - помощь  
+/stats - ваша статистика
+/about - о проекте
 """
-        await query.edit_message_text(help_text, parse_mode='MarkdownV2')
+        await query.edit_message_text(help_text)
         
     elif query.data == "stats":
         user = update.effective_user
         stats_text = f"""
-📊 *Ваша статистика, {user.first_name}*
+📊 Ваша статистика, {user.first_name}
 
-*🎯 Активность:*
+🎯 Активность:
 • 📅 Техник использовано: 15
 • 🔥 Текущая серия: 5 дней
 • ⭐ Лучшая серия: 12 дней
 
-*🏆 Достижения:*
+🏆 Достижения:
 ✅ Первая техника
 ✅ Неделя заботы о себе  
 ✅ Любитель дыхания
-🔲 Месяц практик \(осталось 18 дней\)
+🔲 Месяц практик (осталось 18 дней)
 
-*💪 Продолжайте в том же духе\!*
-Каждая минута практики \- вклад в ваше благополучие 🌿
+💪 Продолжайте в том же духе!
+Каждая минута практики - вклад в ваше благополучие 🌿
 """
-        await query.edit_message_text(stats_text, parse_mode='MarkdownV2')
+        await query.edit_message_text(stats_text)
         
     elif query.data == "about":
         about_text = """
-🌟 *О проекте Anti\-Burnout Bot*
+🌟 О проекте Anti-Burnout Bot
 
-*Проблема:* 70% людей испытывают хронический стресс в повседневной жизни
+Проблема: 70% людей испытывают хронический стресс в повседневной жизни
 
-*Решение:* Ежедневные микро\-практики для профилактики стресса и выгорания
+Решение: Ежедневные микро-практики для профилактики стресса и выгорания
 
-*Наша миссия:* Помочь людям сохранить ментальное здоровье в современном ритме жизни
+Наша миссия: Помочь людям сохранить ментальное здоровье в современном ритме жизни
 
-*📊 Основано на:* 
-• Когнитивно\-поведенческой терапии
+📊 Основано на: 
+• Когнитивно-поведенческой терапии
 • Дыхательных практиках
 • Спортивной медицине  
 • Научных исследованиях о стрессе
 
-*Для всех, кто ценит свое ментальное здоровье* ❤️
+Для всех, кто ценит свое ментальное здоровье ❤️
 """
-        await query.edit_message_text(about_text, parse_mode='MarkdownV2')
+        await query.edit_message_text(about_text)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await button_handler(update, context)
@@ -224,13 +221,12 @@ async def send_daily_technique(context: ContextTypes.DEFAULT_TYPE):
     
     for user_id in active_users:
         try:
-            greeting = f"🌅 *Доброе утро\!* \n\n*Ваша техника на сегодня:*\n"
+            greeting = f"🌅 Доброе утро! \n\nВаша техника на сегодня:\n"
             text = greeting + format_technique(today_technique)
             
             await context.bot.send_message(
                 chat_id=user_id,
-                text=text,
-                parse_mode='MarkdownV2'
+                text=text
             )
         except Exception as e:
             print(f"Ошибка отправки пользователю {user_id}: {e}")
