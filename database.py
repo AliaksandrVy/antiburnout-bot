@@ -38,3 +38,19 @@ class Database:
             (new_end_date, user_id)
         )
         self.conn.commit()
+    
+    def update_subscription(self, user_id, days_duration=30):
+        new_end_date = datetime.date.today() + datetime.timedelta(days=days_duration)
+        self.conn.execute(
+            'UPDATE users SET subscription_end = ? WHERE user_id = ?',
+            (new_end_date, user_id)
+        )
+        self.conn.commit()
+
+    def get_user_subscription(self, user_id):
+        cursor = self.conn.execute(
+            'SELECT subscription_end FROM users WHERE user_id = ?',
+            (user_id,)
+        )
+        result = cursor.fetchone()
+        return result[0] if result else None
