@@ -1,9 +1,7 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-from yookassa import Payment
 import json
 import datetime
-import uuid
 from database import Database
 import os
 import random
@@ -24,10 +22,6 @@ db = Database()
 # Загрузка техник
 with open('techniques.json', 'r', encoding='utf-8') as f:
     techniques = json.load(f)['techniques']
-
-# Конфигурация оплаты
-SUBSCRIPTION_PRICE = 1.00  # 1 доллар
-SUBSCRIPTION_DAYS = 30     # 30 дней подписки
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -90,93 +84,43 @@ _{tech['description']}_
 *⏱ 1\-3 минуты • {tech['type'].title()} • Anti\-Burnout Bot* 🌿
 """
 
-async def create_payment(user_id, amount, description):
-    """Создает платеж в ЮKassa"""
-    try:
-        payment = Payment.create({
-            "amount": {
-                "value": f"{amount:.2f}",
-                "currency": "USD"
-            },
-            "confirmation": {
-                "type": "redirect",
-                "return_url": "https://t.me/AntiBurnout_IT_Bot"
-            },
-            "capture": True,
-            "description": description,
-            "metadata": {
-                "user_id": user_id
-            }
-        }, uuid.uuid4())
-        
-        return payment
-    except Exception as e:
-        print(f"Ошибка создания платежа: {e}")
-        return None
-
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
     if query.data == "subscribe":
-        user = query.from_user
-        
-        # Создаем платеж
-        payment = await create_payment(
-            user.id, 
-            SUBSCRIPTION_PRICE, 
-            f"Подписка Anti-Burnout Bot на {SUBSCRIPTION_DAYS} дней"
-        )
-        
-        if payment:
-            subscribe_text = f"""
+        subscribe_text = """
 💎 *Премиум подписка Anti\-Burnout Bot*
 
 *🚀 Что входит:*
 ✅ Ежедневная техника в 11:00
-✅ Доступ ко всем {len(techniques)} техникам  
+✅ Доступ ко всем 31 техникам  
 ✅ Персональные рекомендации
 ✅ Приоритетная поддержка
 ✅ Статистика прогресса
 
-*💰 Стоимость:* ${SUBSCRIPTION_PRICE} за {SUBSCRIPTION_DAYS} дней
+*💰 Стоимость:* $1 за 30 дней
 
 *🎁 Пробный период:* 3 дня бесплатно
 
-*💳 Для оплаты:*
-Нажмите кнопку ниже чтобы перейти к оплате 👇
+*💳 *Автоматическая оплата временно отключена*
+
+*Для оформления подписки напишите:* @AliaksandrVy
+*Тема:* "ПОДПИСКА ANTI\-BURNOUT"
+
+*🔜 Скоро появится автоматическая оплата через ЮKassa* 🔄
 """
-            keyboard = [
-                [InlineKeyboardButton("💳 Оплатить $1", url=payment.confirmation.confirmation_url)],
-                [InlineKeyboardButton("✅ Я оплатил(а)", callback_data="check_payment")],
-                [InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                subscribe_text,
-                reply_markup=reply_markup,
-                parse_mode='MarkdownV2'
-            )
-        else:
-            await query.edit_message_text(
-                "😔 *Не удалось создать платеж*\n\nПопробуйте позже или напишите @avllks",
-                parse_mode='MarkdownV2'
-            )
+        keyboard = [
+            [InlineKeyboardButton("📨 Написать для подписки", url="https://t.me/AliaksandrVy")],
+            [InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
         
-    elif query.data == "check_payment":
-        # Здесь будет проверка статуса платежа
-        check_text = """
-🔍 *Проверка платежа*
-
-*Чтобы проверить статус платежа:*
-1\. Подождите 1\-2 минуты после оплаты
-2\. Нажмите /start чтобы обновить статус
-3\. Если статус не обновился \- напишите @avllks
-
-*💡 Обычно активация занимает 1\-3 минуты*
-"""
-        await query.edit_message_text(check_text, parse_mode='MarkdownV2')
+        await query.edit_message_text(
+            subscribe_text,
+            reply_markup=reply_markup,
+            parse_mode='MarkdownV2'
+        )
         
     elif query.data == "back_to_menu":
         await start(update, context)
@@ -214,7 +158,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 *💡 Совет:* Используйте бота при первых признаках стресса \- не ждите выгорания\!
 
-*По вопросам и предложениям:* @avllks
+*По вопросам и предложениям:* @AliaksandrVy
+
 *Доступные команды:*
 /start \- главное меню
 /help \- помощь  
@@ -307,14 +252,6 @@ def main():
         print("Ошибка: BOT_TOKEN не установлен!")
         return
     
-    # Проверяем наличие ключей ЮKassa
-    shop_id = os.getenv('YOOKASSA_SHOP_ID')
-    secret_key = os.getenv('YOOKASSA_SECRET_KEY')
-    
-    if not shop_id or not secret_key:
-        print("⚠️  ЮKassa ключи не настроены. Оплата не будет работать.")
-        print("Добавьте YOOKASSA_SHOP_ID и YOOKASSA_SECRET_KEY в .env")
-    
     application = Application.builder().token(token).build()
     
     application.add_handler(CommandHandler("start", start))
@@ -323,7 +260,7 @@ def main():
     application.add_handler(CommandHandler("about", about_command))
     application.add_handler(CallbackQueryHandler(button_handler))
     
-    print("🌿 Бот запущен! Универсальная версия с оплатой $1")
+    print("🌿 Бот запущен! Универсальная версия (ручная оплата)")
     print("🌿 Доступные команды: /start, /help, /stats, /about")
     application.run_polling()
 
