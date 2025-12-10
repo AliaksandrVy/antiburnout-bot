@@ -102,7 +102,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 🎁 Пробный период: 3 дня бесплатно
 
-💳 Для оформления подписки напишите: @AliaksandrVy
+💳 Для оформления подписки напишите: @avllks
 Тема: "ПОДПИСКА ANTI-BURNOUT"
 
 🔜 Скоро появится автоматическая оплата 🔄
@@ -155,7 +155,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 💡 Совет: Используйте бота при первых признаках стресса - не ждите выгорания!
 
-По вопросам и предложениям: @AliaksandrVy
+По вопросам и предложениям: @avllks
 
 Доступные команды:
 /start - главное меню
