@@ -5,10 +5,15 @@ import json
 from datetime import datetime, timedelta
 import random
 import os
-from database import add_user, get_user_stats, update_user_stats, check_subscription, add_subscription
+from dotenv import load_dotenv
+from database import add_user, get_user_stats, update_user_stats, check_subscription, save_payment, update_payment
+from payment import create_payment, check_payment
+
+# Загружаем переменные окружения из .env
+load_dotenv()
 
 # Настройки
-TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+TOKEN = os.getenv('BOT_TOKEN')
 bot = telebot.TeleBot(TOKEN)
 
 # Загрузка техник
@@ -18,47 +23,20 @@ with open('techniques.json', 'r', encoding='utf-8') as f:
 # =================== КЛАВИАТУРЫ ===================
 
 # Главное меню с красивыми кнопками
-main_menu_keyboard = types.ReplyKeyboardMarkup(
-    keyboard=[
-        [types.KeyboardButton(text="🌟 ТЕХНИКА НА СЕГОДНЯ")],
-        [types.KeyboardButton(text="📚 БИБЛИОТЕКА ТЕХНИК"), types.KeyboardButton(text="ℹ️ О ПРОЕКТЕ")],
-        [types.KeyboardButton(text="💰 ПОДПИСКА"), types.KeyboardButton(text="👤 МОЙ ПРОФИЛЬ")]
-    ],
-    resize_keyboard=True,
-    one_time_keyboard=False
-)
-
-# Меню библиотеки
-library_keyboard = types.ReplyKeyboardMarkup(
-    keyboard=[
-        [types.KeyboardButton(text="🧘 ДЫХАТЕЛЬНЫЕ")],
-        [types.KeyboardButton(text="💪 ФИЗИЧЕСКИЕ")],
-        [types.KeyboardButton(text="🧠 ПСИХОЛОГИЧЕСКИЕ")],
-        [types.KeyboardButton(text="🔙 НАЗАД В ГЛАВНОЕ МЕНЮ")]
-    ],
-    resize_keyboard=True,
-    one_time_keyboard=False
-)
+main_menu_keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+main_menu_keyboard.row("🌟 ТЕХНИКА НА СЕГОДНЯ")
+main_menu_keyboard.row("ℹ️ О ПРОЕКТЕ")
+main_menu_keyboard.row("💰 ПОДПИСКА", "👤 МОЙ ПРОФИЛЬ")
 
 # Меню подписки
-subscription_keyboard = types.ReplyKeyboardMarkup(
-    keyboard=[
-        [types.KeyboardButton(text="💰 КУПИТЬ ПОДПИСКУ")],
-        [types.KeyboardButton(text="📊 ИНФОРМАЦИЯ О ПОДПИСКЕ")],
-        [types.KeyboardButton(text="🔙 НАЗАД В ГЛАВНОЕ МЕНЮ")]
-    ],
-    resize_keyboard=True,
-    one_time_keyboard=False
-)
+subscription_keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+subscription_keyboard.row("💰 КУПИТЬ ПОДПИСКУ")
+subscription_keyboard.row("📊 ИНФОРМАЦИЯ О ПОДПИСКЕ")
+subscription_keyboard.row("🔙 НАЗАД В ГЛАВНОЕ МЕНЮ")
 
 # Кнопка только "Назад" для простых экранов
-back_keyboard = types.ReplyKeyboardMarkup(
-    keyboard=[
-        [types.KeyboardButton(text="🔙 НАЗАД В ГЛАВНОЕ МЕНЮ")]
-    ],
-    resize_keyboard=True,
-    one_time_keyboard=False
-)
+back_keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+back_keyboard.row("🔙 НАЗАД В ГЛАВНОЕ МЕНЮ")
 
 # =================== ОБРАБОТЧИКИ ===================
 
@@ -124,44 +102,6 @@ def daily_technique(message):
     # Обновляем статистику
     update_user_stats(user_id, 'daily_techniques')
 
-@bot.message_handler(func=lambda message: message.text == "📚 БИБЛИОТЕКА ТЕХНИК")
-def library_menu(message):
-    """Меню библиотеки техник"""
-    response = (
-        "📚 БИБЛИОТЕКА ТЕХНИК\n\n"
-        "Выберите категорию техник:\n\n"
-        "🧘 ДЫХАТЕЛЬНЫЕ - техники для успокоения и снятия стресса\n"
-        "💪 ФИЗИЧЕСКИЕ - упражнения для тела и энергии\n"
-        "🧠 ПСИХОЛОГИЧЕСКИЕ - ментальные практики и установки"
-    )
-    
-    bot.send_message(message.chat.id, response, reply_markup=library_keyboard)
-
-@bot.message_handler(func=lambda message: message.text in ["🧘 ДЫХАТЕЛЬНЫЕ", "💪 ФИЗИЧЕСКИЕ", "🧠 ПСИХОЛОГИЧЕСКИЕ"])
-def show_category(message):
-    """Показывает техники выбранной категории"""
-    category_map = {
-        "🧘 ДЫХАТЕЛЬНЫЕ": "дыхательные",
-        "💪 ФИЗИЧЕСКИЕ": "физические", 
-        "🧠 ПСИХОЛОГИЧЕСКИЕ": "психологические"
-    }
-    
-    category = category_map[message.text]
-    tech_list = techniques.get(category, [])
-    
-    if not tech_list:
-        bot.send_message(message.chat.id, "Техники в этой категории пока не добавлены.", reply_markup=library_keyboard)
-        return
-    
-    response = f"📚 {message.text} ТЕХНИКИ:\n\n"
-    for i, tech in enumerate(tech_list[:10], 1):  # Показываем первые 10
-        response += f"{i}. {tech['name']}\n"
-        response += f"   ⏱ {tech.get('time', '5-10 мин')}\n"
-        response += f"   {tech['description'][:100]}...\n\n"
-    
-    response += "Для просмотра подробного описания конкретной техники напишите её номер."
-    bot.send_message(message.chat.id, response, reply_markup=library_keyboard)
-
 @bot.message_handler(func=lambda message: message.text == "ℹ️ О ПРОЕКТЕ")
 def about_project(message):
     """Информация о проекте"""
@@ -174,7 +114,7 @@ def about_project(message):
         "• SQLite для хранения данных\n"
         "• Интеграция с ЮКассой для оплаты\n\n"
         "📞 Контакты:\n"
-        "По вопросам и предложениям: @ваш_контакт\n\n"
+        "По вопросам и предложениям: @avllks\n\n"
         "💖 Помни: Забота о себе - это не роскошь, а необходимость!"
     )
     
@@ -209,7 +149,7 @@ def subscription_menu(message):
             f"• 📚 Доступ ко всем техникам\n"
             f"• 📊 Отслеживание прогресса\n"
             f"• 🔔 Регулярные напоминания\n\n"
-            f"💎 Стоимость: 299₽/месяц\n\n"
+            f"💎 Стоимость: 99₽/месяц\n\n"
             f"Нажмите '💰 КУПИТЬ ПОДПИСКУ' для оформления."
         )
     
@@ -246,15 +186,21 @@ def back_to_main(message):
     response = "Вы вернулись в главное меню. Выберите действие:"
     bot.send_message(message.chat.id, response, reply_markup=main_menu_keyboard)
 
+@bot.message_handler(func=lambda message: message.text == "🔙 НАЗАД")
+def back_to_subscription_menu(message):
+    """Возврат в меню подписки"""
+    response = "Вы вернулись в меню подписки:"
+    bot.send_message(message.chat.id, response, reply_markup=subscription_keyboard)
+
 @bot.message_handler(func=lambda message: message.text == "📊 ИНФОРМАЦИЯ О ПОДПИСКЕ")
 def subscription_info(message):
     """Информация о подписке"""
     response = (
         "📊 ИНФОРМАЦИЯ О ПОДПИСКЕ\n\n"
         "💎 Тарифы:\n"
-        "• 1 месяц: 299₽\n"
-        "• 3 месяца: 799₽ (скидка 10%)\n"
-        "• 12 месяцев: 2399₽ (скидка 33%)\n\n"
+        "• 1 месяц: 99₽\n"
+        "• 3 месяца: 269₽ (экономия 28₽)\n"
+        "• 12 месяцев: 799₽ (экономия 389₽)\n\n"
         "✨ Что входит:\n"
         "✅ Персональные техники на каждый день\n"
         "✅ Полный доступ к библиотеке\n"
@@ -265,18 +211,95 @@ def subscription_info(message):
     bot.send_message(message.chat.id, response, reply_markup=subscription_keyboard)
 
 @bot.message_handler(func=lambda message: message.text == "💰 КУПИТЬ ПОДПИСКУ")
-def buy_subscription(message):
-    """Покупка подписки (заглушка для ЮКассы)"""
+def choose_subscription_plan(message):
+    """Выбор тарифа подписки"""
+    user_id = message.from_user.id
+    
+    # Создаем клавиатуру для выбора тарифа
+    tariff_keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    tariff_keyboard.row("📅 1 МЕСЯЦ - 99₽")
+    tariff_keyboard.row("📅 3 МЕСЯЦА - 269₽")
+    tariff_keyboard.row("📅 12 МЕСЯЦЕВ - 799₽")
+    tariff_keyboard.row("🔙 НАЗАД")
+    
     response = (
-        "💰 ОФОРМЛЕНИЕ ПОДПИСКИ\n\n"
-        "Выберите период:\n\n"
-        "1️⃣ 1 месяц - 299₽\n"
-        "2️⃣ 3 месяца - 799₽\n"
-        "3️⃣ 12 месяцев - 2399₽\n\n"
-        "В ближайшее время здесь будет интеграция с ЮКассой для оплаты.\n"
-        "А пока вы можете воспользоваться демо-версией функций."
+        "💰 ВЫБЕРИТЕ ТАРИФ ПОДПИСКИ:\n\n"
+        "📅 1 МЕСЯЦ - 99₽\n"
+        "• Ежедневные техники\n"
+        "• Полный доступ\n\n"
+        "📅 3 МЕСЯЦА - 269₽\n"
+        "• Экономия 28₽\n"
+        "• Все преимущества\n\n"
+        "📅 12 МЕСЯЦЕВ - 799₽\n"
+        "• Экономия 389₽\n"
+        "• Максимальная выгода\n\n"
+        "Выберите вариант:"
     )
-    bot.send_message(message.chat.id, response, reply_markup=subscription_keyboard)
+    
+    bot.send_message(message.chat.id, response, reply_markup=tariff_keyboard)
+
+@bot.message_handler(func=lambda message: message.text in ["📅 1 МЕСЯЦ - 99₽", "📅 3 МЕСЯЦА - 269₽", "📅 12 МЕСЯЦЕВ - 799₽"])
+def create_subscription_payment(message):
+    """Создание платежа для выбранного тарифа"""
+    user_id = message.from_user.id
+    
+    # Определяем выбранный тариф
+    tariff_map = {
+        "📅 1 МЕСЯЦ - 99₽": {"amount": 99.00, "days": 30, "description": "Подписка на 1 месяц"},
+        "📅 3 МЕСЯЦА - 269₽": {"amount": 269.00, "days": 90, "description": "Подписка на 3 месяца"},
+        "📅 12 МЕСЯЦЕВ - 799₽": {"amount": 799.00, "days": 365, "description": "Подписка на 12 месяцев"}
+    }
+    
+    tariff = tariff_map[message.text]
+    
+    # Создаем платеж в ЮКассе
+    try:
+        payment_id, payment_url = create_payment(
+            user_id=user_id,
+            amount=tariff["amount"],
+            description=tariff["description"]
+        )
+        
+        # Сохраняем платеж в БД
+        save_payment(user_id, payment_id, tariff["amount"], tariff["days"])
+        
+        # Отправляем пользователю ссылку для оплаты
+        response = (
+            f"💳 ОПЛАТА ПОДПИСКИ\n\n"
+            f"Тариф: {message.text}\n"
+            f"Сумма: {tariff['amount']:.0f}₽\n"
+            f"Срок: {tariff['days']} дней\n\n"
+            f"👉 Для оплаты перейдите по ссылке:\n{payment_url}\n\n"
+            f"После успешной оплаты подписка активируется автоматически.\n"
+            f"Обычно это занимает 1-2 минуты.\n\n"
+            f"🔍 Проверить статус оплаты: /check_payment"
+        )
+        
+        bot.send_message(message.chat.id, response, reply_markup=back_keyboard)
+        
+    except Exception as e:
+        print(f"Ошибка при создании платежа: {e}")
+        bot.send_message(
+            message.chat.id,
+            "⚠️ Произошла ошибка при создании платежа. Пожалуйста, попробуйте позже.",
+            reply_markup=subscription_keyboard
+        )
+
+@bot.message_handler(commands=['check_payment'])
+def check_payment_status(message):
+    """Проверка статуса последнего платежа"""
+    user_id = message.from_user.id
+    
+    # Здесь нужно добавить логику получения последнего платежа пользователя
+    # и проверки его статуса через check_payment()
+    
+    bot.send_message(
+        message.chat.id,
+        "🔍 Функция проверки платежа будет добавлена позже.\n"
+        "Если вы оплатили, но подписка не активировалась,\n"
+        "напишите в поддержку: @avllks",
+        reply_markup=main_menu_keyboard
+    )
 
 # =================== ЗАПУСК БОТА ===================
 
