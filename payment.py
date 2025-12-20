@@ -4,17 +4,29 @@ import uuid
 import os
 from dotenv import load_dotenv
 
+# ЯВНО загружаем .env
 load_dotenv()
 
-# Настройки ЮКассы
-Configuration.account_id = os.getenv('YOOKASSA_SHOP_ID')
-Configuration.secret_key = os.getenv('YOOKASSA_SECRET_KEY')
+# ДЕБАГ: проверим, загрузились ли переменные
+shop_id = os.getenv('YOOKASSA_SHOP_ID')
+secret_key = os.getenv('YOOKASSA_SECRET_KEY')
 
-def create_payment(user_id, amount, description, return_url="https://t.me/avllks"):
+print(f"DEBUG: YOOKASSA_SHOP_ID = {shop_id}")
+print(f"DEBUG: YOOKASSA_SECRET_KEY = {'*' * 20 if secret_key else 'NOT FOUND'}")
+
+# Настройки ЮКассы
+Configuration.account_id = shop_id
+Configuration.secret_key = secret_key
+
+def create_payment(user_id, amount, description, return_url="https://t.me"):
     """
     Создаёт платёж в ЮКассе
     Возвращает ссылку для оплаты и payment_id
     """
+    # Проверяем, что ключи установлены
+    if not Configuration.account_id or not Configuration.secret_key:
+        raise ValueError("Не настроены ключи ЮКассы (account_id или secret_key)")
+    
     # Генерируем уникальный id платежа
     idempotence_key = str(uuid.uuid4())
     
