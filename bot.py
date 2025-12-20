@@ -1,326 +1,285 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-from yookassa import Payment, Configuration
+import telebot
+from telebot import types
+import sqlite3
 import json
-import datetime
-import uuid
-from database import Database
+from datetime import datetime, timedelta
+import random
 import os
+from database import add_user, get_user_stats, update_user_stats, check_subscription, add_subscription
 
-# ============ НАСТРОЙКА ЮKASSA ============
-Configuration.account_id = os.getenv('YOOKASSA_SHOP_ID', '')
-Configuration.secret_key = os.getenv('YOOKASSA_SECRET_KEY', '')
+# Настройки
+TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+bot = telebot.TeleBot(TOKEN)
 
-# Проверка настроек
-YOOKASSA_ENABLED = bool(Configuration.account_id and Configuration.secret_key)
-if YOOKASSA_ENABLED:
-    print(f"✅ ЮKassa подключен | Shop ID: {Configuration.account_id}")
-else:
-    print("⚠️  ЮKassa не подключен | Ручная оплата")
-
-# ============ ОСНОВНЫЕ НАСТРОЙКИ ============
-db = Database()
-
+# Загрузка техник
 with open('techniques.json', 'r', encoding='utf-8') as f:
-    techniques = json.load(f)['techniques']
+    techniques = json.load(f)
 
-SUBSCRIPTION_PRICE = 100.00  # 100 рублей ≈ $1
-SUBSCRIPTION_DAYS = 30
-ADMIN_USERNAME = "@avllks"
-ADMIN_URL = "https://t.me/avllks"
+# =================== КЛАВИАТУРЫ ===================
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    db.add_user(user.id, user.username, user.first_name)
+# Главное меню с красивыми кнопками
+main_menu_keyboard = types.ReplyKeyboardMarkup(
+    keyboard=[
+        [types.KeyboardButton(text="🌟 ТЕХНИКА НА СЕГОДНЯ")],
+        [types.KeyboardButton(text="📚 БИБЛИОТЕКА ТЕХНИК"), types.KeyboardButton(text="ℹ️ О ПРОЕКТЕ")],
+        [types.KeyboardButton(text="💰 ПОДПИСКА"), types.KeyboardButton(text="👤 МОЙ ПРОФИЛЬ")]
+    ],
+    resize_keyboard=True,
+    one_time_keyboard=False
+)
+
+# Меню библиотеки
+library_keyboard = types.ReplyKeyboardMarkup(
+    keyboard=[
+        [types.KeyboardButton(text="🧘 ДЫХАТЕЛЬНЫЕ")],
+        [types.KeyboardButton(text="💪 ФИЗИЧЕСКИЕ")],
+        [types.KeyboardButton(text="🧠 ПСИХОЛОГИЧЕСКИЕ")],
+        [types.KeyboardButton(text="🔙 НАЗАД В ГЛАВНОЕ МЕНЮ")]
+    ],
+    resize_keyboard=True,
+    one_time_keyboard=False
+)
+
+# Меню подписки
+subscription_keyboard = types.ReplyKeyboardMarkup(
+    keyboard=[
+        [types.KeyboardButton(text="💰 КУПИТЬ ПОДПИСКУ")],
+        [types.KeyboardButton(text="📊 ИНФОРМАЦИЯ О ПОДПИСКЕ")],
+        [types.KeyboardButton(text="🔙 НАЗАД В ГЛАВНОЕ МЕНЮ")]
+    ],
+    resize_keyboard=True,
+    one_time_keyboard=False
+)
+
+# Кнопка только "Назад" для простых экранов
+back_keyboard = types.ReplyKeyboardMarkup(
+    keyboard=[
+        [types.KeyboardButton(text="🔙 НАЗАД В ГЛАВНОЕ МЕНЮ")]
+    ],
+    resize_keyboard=True,
+    one_time_keyboard=False
+)
+
+# =================== ОБРАБОТЧИКИ ===================
+
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    """Обработчик команды /start"""
+    user_id = message.from_user.id
+    username = message.from_user.username or message.from_user.first_name
     
-    welcome_text = f"""
-🌿 Добро пожаловать, {user.first_name}!
-
-💫 Anti-Burnout Bot — ежедневные техники против стресса
-
-⏱ Всего 1-3 минуты в день для вашего спокойствия
-
-Выберите действие: 👇
-"""
+    # Добавляем пользователя в БД
+    add_user(user_id, username)
     
-    keyboard = [
-        [InlineKeyboardButton("📅 Техника на сегодня", callback_data="today")],
-        [InlineKeyboardButton("💆 Пример техники", callback_data="sample")],
-        [InlineKeyboardButton("💎 Подписка — $1/месяц", callback_data="subscribe")],
-        [InlineKeyboardButton("📊 Моя статистика", callback_data="stats"),
-         InlineKeyboardButton("❓ Помощь", callback_data="help")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    welcome_text = (
+        f"🌟 Привет, {username}!\n\n"
+        "Я — твой личный помощник в борьбе с выгоранием.\n\n"
+        "✨ Что я умею:\n"
+        "• Подбирать технику на каждый день\n"
+        "• Хранить библиотеку анти-выгорательных практик\n"
+        "• Помогать отслеживать твое состояние\n\n"
+        "Выбери, что тебя интересует:"
+    )
     
-    await update.message.reply_text(welcome_text, reply_markup=reply_markup)
+    bot.send_message(
+        message.chat.id, 
+        welcome_text,
+        reply_markup=main_menu_keyboard
+    )
 
-def format_technique(tech):
-    """Форматирует технику для отправки"""
-    type_emojis = {"дыхание": "🌬️", "упражнение": "🏃", "фокус": "🎯"}
-    emoji = type_emojis.get(tech['type'], "✨")
-    steps = "\n".join([f"• {step}" for step in tech['steps']])
+@bot.message_handler(func=lambda message: message.text == "🌟 ТЕХНИКА НА СЕГОДНЯ")
+def daily_technique(message):
+    """Техника на сегодня - только для подписчиков"""
+    user_id = message.from_user.id
     
-    return f"""
-{emoji} {tech['name']}
-
-{tech['description']}
-
-📋 Шаги:
-{steps}
-
-💡 {tech['tip']}
-
-⏱ 1-3 минуты • Anti-Burnout Bot 🌿
-
-💎 Подписка всего за $1/месяц → /start
-"""
-
-def format_daily_technique(tech):
-    """Форматирует для ежедневной рассылки"""
-    type_emojis = {"дыхание": "🌬️", "упражнение": "🏃", "фокус": "🎯"}
-    emoji = type_emojis.get(tech['type'], "✨")
-    steps = "\n".join([f"• {step}" for step in tech['steps']])
-    date_str = datetime.datetime.now().strftime('%d.%m.%Y')
-    
-    return f"""
-🌅 Доброе утро!
-
-📅 Техника на сегодня ({date_str}):
-
-{emoji} {tech['name']}
-
-{tech['description']}
-
-📋 Шаги:
-{steps}
-
-💡 {tech['tip']}
-
-⏱ 1-3 минуты • Anti-Burnout Bot 🌿
-
-💎 Подписка всего за $1/месяц → /start
-"""
-
-async def create_payment(user_id):
-    """Создает платеж в ЮKassa"""
-    try:
-        payment = Payment.create({
-            "amount": {
-                "value": f"{SUBSCRIPTION_PRICE:.2f}",
-                "currency": "RUB"
-            },
-            "confirmation": {
-                "type": "redirect",
-                "return_url": "https://t.me/AntiBurnout_IT_Bot"
-            },
-            "capture": True,
-            "description": f"Подписка Anti-Burnout Bot на {SUBSCRIPTION_DAYS} дней",
-            "metadata": {
-                "user_id": user_id,
-                "product": "anti_burnout_subscription"
-            }
-        }, str(uuid.uuid4()))
-        
-        return {
-            "id": payment.id,
-            "confirmation_url": payment.confirmation.confirmation_url
-        }
-    except Exception as e:
-        print(f"❌ Ошибка создания платежа: {e}")
-        return None
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    if query.data == "subscribe":
-        user = query.from_user
-        
-        if YOOKASSA_ENABLED:
-            # АВТОМАТИЧЕСКАЯ ОПЛАТА
-            payment = await create_payment(user.id)
-            
-            if payment:
-                subscribe_text = f"""
-💎 Anti-Burnout Bot — $1 в месяц
-
-🏆 Что получите за $1:
-• Ежедневная техника в 11:00
-• 31 техника для разных ситуаций
-• Доступ в любое время
-• Поддержка и обновления
-
-💰 Всего $1 в месяц
-(≈ 100₽ • меньше чашки кофе)
-
-💳 Нажмите кнопку для безопасной оплаты:
-
-✅ Активация мгновенно
-✅ Можно отменить в любой момент
-✅ Помогаем 1000+ людям
-"""
-                keyboard = [
-                    [InlineKeyboardButton("💳 Оплатить $1 (100₽)", url=payment['confirmation_url'])],
-                    [InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]
-                ]
-            else:
-                subscribe_text = "😔 Ошибка при создании платежа"
-                keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]]
-        else:
-            # РУЧНАЯ ОПЛАТА
-            subscribe_text = f"""
-💎 Anti-Burnout Bot — $1 в месяц
-
-🏆 Что получите за $1:
-• Ежедневная техника в 11:00
-• 31 техника для разных ситуаций
-• Доступ в любое время
-• Поддержка и обновления
-
-💰 Всего $1 в месяц
-(≈ 100₽ • меньше чашки кофе)
-
-💳 Для оформления подписки напишите:
-{ADMIN_USERNAME}
-Тема: "ПОДПИСКА ANTI-BURNOUT"
-
-✅ Активация в течение 5 минут
-✅ Помогаем 1000+ людям
-"""
-            keyboard = [
-                [InlineKeyboardButton("📨 Написать для подписки", url=ADMIN_URL)],
-                [InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]
-            ]
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(subscribe_text, reply_markup=reply_markup)
-    
-    elif query.data == "back_to_menu":
-        await start(update, context)
-    
-    elif query.data == "today":
-        day_of_month = datetime.datetime.now().day
-        technique_index = (day_of_month - 1) % len(techniques)
-        today_technique = techniques[technique_index]
-        text = format_daily_technique(today_technique)
-        await query.edit_message_text(text)
-    
-    elif query.data == "sample":
-        # ВСЕГДА показываем первую технику из списка
-        sample_technique = techniques[0]
-        text = "💆 Пример техники:\n" + format_technique(sample_technique)
-        await query.edit_message_text(text)
-    
-    elif query.data == "help":
-        help_text = f"""
-🆘 Помощь по боту
-
-📅 Техника на сегодня — уникальная практика на каждый день
-💆 Пример техники — посмотрите как работает бот
-
-💎 Подписка:
-• Всего $1 (100₽) в месяц
-• Ежедневные техники в 11:00
-• Мгновенная активация
-
-💡 Используйте бота при первых признаках стресса!
-
-По вопросам: {ADMIN_USERNAME}
-"""
-        await query.edit_message_text(help_text)
-    
-    elif query.data == "stats":
-        user = update.effective_user
-        stats_text = f"""
-📊 Ваша статистика, {user.first_name}
-
-🎯 Активность:
-• 📅 Техник использовано: 15
-• 🔥 Текущая серия: 5 дней
-• ⭐ Лучшая серия: 12 дней
-
-🏆 Достижения:
-✅ Первая техника
-✅ Неделя заботы о себе
-✅ Любитель дыхания
-🔲 Месяц практик (осталось 18 дней)
-
-💪 Продолжайте в том же духе!
-"""
-        await query.edit_message_text(stats_text)
-    
-    elif query.data == "about":
-        about_text = f"""
-🌟 О проекте Anti-Burnout Bot
-
-Проблема: 70% людей испытывают хронический стресс
-Решение: Ежедневные микро-практики для профилактики стресса
-
-Наша миссия: Сделать заботу о ментальном здоровье доступной
-
-💰 За $1 в месяц вы получаете:
-• 31 технику против стресса
-• Ежедневную поддержку
-• Инструменты для баланса
-
-По всем вопросам: {ADMIN_USERNAME}
-
-Для всех, кто ценит свое спокойствие ❤️
-"""
-        await query.edit_message_text(about_text)
-
-async def send_daily_technique(context: ContextTypes.DEFAULT_TYPE):
-    """Ежедневная рассылка техник"""
-    active_users = db.get_active_users()
-    today_technique = techniques[datetime.datetime.now().day % len(techniques)]
-    
-    for user_id in active_users:
-        try:
-            text = format_daily_technique(today_technique)
-            await context.bot.send_message(chat_id=user_id, text=text)
-        except Exception as e:
-            print(f"Ошибка отправки пользователю {user_id}: {e}")
-
-def main():
-    token = os.getenv('BOT_TOKEN')
-    if not token:
-        print("❌ BOT_TOKEN не установлен!")
+    # Проверяем подписку
+    if not check_subscription(user_id):
+        bot.send_message(
+            message.chat.id,
+            "🔒 Эта функция доступна только по подписке!\n\n"
+            "Оформите подписку, чтобы получать:\n"
+            "• Персональную технику на каждый день\n"
+            "• Доступ к полной библиотеке\n"
+            "• Прогресс и статистику\n\n"
+            "Нажмите '💰 ПОДПИСКА' для оформления.",
+            reply_markup=main_menu_keyboard
+        )
         return
     
-    application = Application.builder().token(token).build()
+    # Если подписка есть - показываем технику
+    category = random.choice(list(techniques.keys()))
+    technique = random.choice(techniques[category])
     
-    # Обработчики команд
-    async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await button_handler(update, context)
+    response = (
+        f"🌟 ТЕХНИКА НА СЕГОДНЯ\n\n"
+        f"📁 Категория: {category}\n"
+        f"🎯 Название: {technique['name']}\n\n"
+        f"📝 Описание:\n{technique['description']}\n\n"
+        f"⏱ Время выполнения: {technique.get('time', '5-10 минут')}\n\n"
+        f"💡 Совет: {technique.get('tip', 'Выполняйте технику осознанно, сосредотачиваясь на процессе.')}"
+    )
     
-    async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await button_handler(update, context)
+    bot.send_message(message.chat.id, response, reply_markup=back_keyboard)
     
-    async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await button_handler(update, context)
+    # Обновляем статистику
+    update_user_stats(user_id, 'daily_techniques')
+
+@bot.message_handler(func=lambda message: message.text == "📚 БИБЛИОТЕКА ТЕХНИК")
+def library_menu(message):
+    """Меню библиотеки техник"""
+    response = (
+        "📚 БИБЛИОТЕКА ТЕХНИК\n\n"
+        "Выберите категорию техник:\n\n"
+        "🧘 ДЫХАТЕЛЬНЫЕ - техники для успокоения и снятия стресса\n"
+        "💪 ФИЗИЧЕСКИЕ - упражнения для тела и энергии\n"
+        "🧠 ПСИХОЛОГИЧЕСКИЕ - ментальные практики и установки"
+    )
     
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("stats", stats_command))
-    application.add_handler(CommandHandler("about", about_command))
-    application.add_handler(CallbackQueryHandler(button_handler))
+    bot.send_message(message.chat.id, response, reply_markup=library_keyboard)
+
+@bot.message_handler(func=lambda message: message.text in ["🧘 ДЫХАТЕЛЬНЫЕ", "💪 ФИЗИЧЕСКИЕ", "🧠 ПСИХОЛОГИЧЕСКИЕ"])
+def show_category(message):
+    """Показывает техники выбранной категории"""
+    category_map = {
+        "🧘 ДЫХАТЕЛЬНЫЕ": "дыхательные",
+        "💪 ФИЗИЧЕСКИЕ": "физические", 
+        "🧠 ПСИХОЛОГИЧЕСКИЕ": "психологические"
+    }
     
-    # Ежедневная рассылка в 11:00 по МСК (8:00 UTC)
-    if application.job_queue:
-        application.job_queue.run_daily(
-            send_daily_technique,
-            time=datetime.time(hour=8, minute=0),  # 11:00 МСК
-            days=(0, 1, 2, 3, 4, 5, 6)
+    category = category_map[message.text]
+    tech_list = techniques.get(category, [])
+    
+    if not tech_list:
+        bot.send_message(message.chat.id, "Техники в этой категории пока не добавлены.", reply_markup=library_keyboard)
+        return
+    
+    response = f"📚 {message.text} ТЕХНИКИ:\n\n"
+    for i, tech in enumerate(tech_list[:10], 1):  # Показываем первые 10
+        response += f"{i}. {tech['name']}\n"
+        response += f"   ⏱ {tech.get('time', '5-10 мин')}\n"
+        response += f"   {tech['description'][:100]}...\n\n"
+    
+    response += "Для просмотра подробного описания конкретной техники напишите её номер."
+    bot.send_message(message.chat.id, response, reply_markup=library_keyboard)
+
+@bot.message_handler(func=lambda message: message.text == "ℹ️ О ПРОЕКТЕ")
+def about_project(message):
+    """Информация о проекте"""
+    response = (
+        "ℹ️ О ПРОЕКТЕ\n\n"
+        "🤖 Анти-выгорание Бот\n\n"
+        "Миссия: Помогать людям справляться с эмоциональным выгоранием и стрессом через простые и эффективные техники.\n\n"
+        "🔧 Технологии:\n"
+        "• Python + Telebot\n"
+        "• SQLite для хранения данных\n"
+        "• Интеграция с ЮКассой для оплаты\n\n"
+        "📞 Контакты:\n"
+        "По вопросам и предложениям: @ваш_контакт\n\n"
+        "💖 Помни: Забота о себе - это не роскошь, а необходимость!"
+    )
+    
+    bot.send_message(message.chat.id, response, reply_markup=back_keyboard)
+
+@bot.message_handler(func=lambda message: message.text == "💰 ПОДПИСКА")
+def subscription_menu(message):
+    """Меню подписки"""
+    user_id = message.from_user.id
+    has_subscription = check_subscription(user_id)
+    
+    if has_subscription:
+        status = "✅ АКТИВНА"
+        days_left = "30"  # Здесь нужно добавить логику расчета дней
+        response = (
+            f"💰 ВАША ПОДПИСКА\n\n"
+            f"Статус: {status}\n"
+            f"Дней осталось: {days_left}\n\n"
+            f"Что дает подписка:\n"
+            f"• 🌟 Техника на каждый день\n"
+            f"• 📚 Полная библиотека техник\n"
+            f"• 📊 Статистика и прогресс\n"
+            f"• 🔔 Напоминания и поддержка"
+        )
+    else:
+        status = "❌ НЕ АКТИВНА"
+        response = (
+            f"💰 ПОДПИСКА\n\n"
+            f"Статус: {status}\n\n"
+            f"✨ Преимущества подписки:\n"
+            f"• 🌟 Персональная техника на каждый день\n"
+            f"• 📚 Доступ ко всем техникам\n"
+            f"• 📊 Отслеживание прогресса\n"
+            f"• 🔔 Регулярные напоминания\n\n"
+            f"💎 Стоимость: 299₽/месяц\n\n"
+            f"Нажмите '💰 КУПИТЬ ПОДПИСКУ' для оформления."
         )
     
-    print("\n" + "="*50)
-    print("🌿 Anti-Burnout Bot ЗАПУЩЕН")
-    print(f"👤 Контакты: {ADMIN_USERNAME}")
-    print(f"💳 Автоматическая оплата: {'ВКЛЮЧЕНА ✅' if YOOKASSA_ENABLED else 'ВЫКЛЮЧЕНА ⚠️'}")
-    print(f"💰 Цена подписки: {SUBSCRIPTION_PRICE}₽ ($1)")
-    print("="*50)
+    bot.send_message(message.chat.id, response, reply_markup=subscription_keyboard)
+
+@bot.message_handler(func=lambda message: message.text == "👤 МОЙ ПРОФИЛЬ")
+def user_profile(message):
+    """Профиль пользователя"""
+    user_id = message.from_user.id
+    stats = get_user_stats(user_id)
+    has_subscription = check_subscription(user_id)
     
-    application.run_polling()
+    subscription_status = "✅ Активна" if has_subscription else "❌ Не активна"
+    
+    response = (
+        f"👤 ВАШ ПРОФИЛЬ\n\n"
+        f"🆔 ID: {user_id}\n"
+        f"👤 Имя: {message.from_user.first_name}\n"
+        f"📊 Подписка: {subscription_status}\n\n"
+        f"📈 ВАША СТАТИСТИКА:\n"
+        f"• Техник выполнено: {stats.get('daily_techniques', 0)}\n"
+        f"• Дней с ботом: {stats.get('days_with_bot', 1)}\n"
+        f"• Активность: {stats.get('activity_score', 0)} баллов\n\n"
+        f"🎯 Цель: Заботиться о себе каждый день!"
+    )
+    
+    bot.send_message(message.chat.id, response, reply_markup=back_keyboard)
+
+# =================== НАВИГАЦИЯ "НАЗАД" ===================
+
+@bot.message_handler(func=lambda message: message.text == "🔙 НАЗАД В ГЛАВНОЕ МЕНЮ")
+def back_to_main(message):
+    """Возврат в главное меню"""
+    response = "Вы вернулись в главное меню. Выберите действие:"
+    bot.send_message(message.chat.id, response, reply_markup=main_menu_keyboard)
+
+@bot.message_handler(func=lambda message: message.text == "📊 ИНФОРМАЦИЯ О ПОДПИСКЕ")
+def subscription_info(message):
+    """Информация о подписке"""
+    response = (
+        "📊 ИНФОРМАЦИЯ О ПОДПИСКЕ\n\n"
+        "💎 Тарифы:\n"
+        "• 1 месяц: 299₽\n"
+        "• 3 месяца: 799₽ (скидка 10%)\n"
+        "• 12 месяцев: 2399₽ (скидка 33%)\n\n"
+        "✨ Что входит:\n"
+        "✅ Персональные техники на каждый день\n"
+        "✅ Полный доступ к библиотеке\n"
+        "✅ Статистика и прогресс\n"
+        "✅ Поддержка и советы\n\n"
+        "🔄 Автопродление можно отключить в любой момент."
+    )
+    bot.send_message(message.chat.id, response, reply_markup=subscription_keyboard)
+
+@bot.message_handler(func=lambda message: message.text == "💰 КУПИТЬ ПОДПИСКУ")
+def buy_subscription(message):
+    """Покупка подписки (заглушка для ЮКассы)"""
+    response = (
+        "💰 ОФОРМЛЕНИЕ ПОДПИСКИ\n\n"
+        "Выберите период:\n\n"
+        "1️⃣ 1 месяц - 299₽\n"
+        "2️⃣ 3 месяца - 799₽\n"
+        "3️⃣ 12 месяцев - 2399₽\n\n"
+        "В ближайшее время здесь будет интеграция с ЮКассой для оплаты.\n"
+        "А пока вы можете воспользоваться демо-версией функций."
+    )
+    bot.send_message(message.chat.id, response, reply_markup=subscription_keyboard)
+
+# =================== ЗАПУСК БОТА ===================
 
 if __name__ == '__main__':
-    main()
+    print("🤖 Бот запущен...")
+    bot.infinity_polling()
