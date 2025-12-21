@@ -78,6 +78,17 @@ def init_database():
         )
     ''')
     
+    # Таблица дневных техник
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS daily_techniques (
+            date DATE,
+            tech_type TEXT,
+            technique_name TEXT,
+            technique_data TEXT,
+            PRIMARY KEY (date, tech_type)
+        )
+    ''')
+    
     conn.commit()
     conn.close()
     logger.info("✅ База данных инициализирована")
@@ -297,6 +308,48 @@ def get_all_payments():
     finally:
         conn.close()
 
+def get_daily_technique(tech_type):
+    """Получение дневной техники для категории"""
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    try:
+        today = datetime.now().date().isoformat()
+        cursor.execute(
+            "SELECT technique_data FROM daily_techniques WHERE date = ? AND tech_type = ?",
+            (today, tech_type)
+        )
+        result = cursor.fetchone()
+        
+        if result:
+            # Возвращаем сохраненную технику
+            return json.loads(result[0])
+        else:
+            # Выбираем новую технику для сегодня
+            filtered_techniques = [t for t in techniques_list if t.get('type') == tech_type]
+            if not filtered_techniques:
+                return None
+            
+            technique = random.choice(filtered_techniques)
+            
+            # Сохраняем в БД
+            technique_json = json.dumps(technique, ensure_ascii=False)
+            cursor.execute(
+                "INSERT OR REPLACE INTO daily_techniques (date, tech_type, technique_name, technique_data) VALUES (?, ?, ?, ?)",
+                (today, tech_type, technique.get('name', ''), technique_json)
+            )
+            conn.commit()
+            
+            return technique
+    except Exception as e:
+        logger.error(f"Ошибка получения дневной техники: {e}")
+        # В случае ошибки возвращаем случайную технику
+        filtered_techniques = [t for t in techniques_list if t.get('type') == tech_type]
+        if filtered_techniques:
+            return random.choice(filtered_techniques)
+        return None
+    finally:
+        conn.close()
+
 def find_payment_by_id(payment_id):
     """Поиск платежа по ID"""
     conn = sqlite3.connect('users.db')
@@ -511,7 +564,6 @@ back_keyboard.row("🔙 НАЗАД В ГЛАВНОЕ МЕНЮ")
 # Клавиатура для выбора типа техники
 technique_type_keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
 technique_type_keyboard.row("🫁 Дыхание", "💪 Упражнение", "🧠 Фокус")
-technique_type_keyboard.row("🎲 Случайная техника")
 technique_type_keyboard.row("🔙 НАЗАД В ГЛАВНОЕ МЕНЮ")
 
 # Клавиатура для выбора состояния
@@ -639,11 +691,11 @@ def daily_technique(message):
     # Спрашиваем, какую технику выбрать
     response = (
         "🌟 *ЧТО ВАМ НУЖНО СЕЙЧАС?*\n\n"
-        "Выберите тип техники или ваше состояние:\n\n"
+        "Выберите тип техники:\n\n"
         "🫁 *Дыхание* - для успокоения и расслабления\n"
         "💪 *Упражнение* - для снятия физического напряжения\n"
-        "🧠 *Фокус* - для концентрации и ментального баланса\n"
-        "🎲 *Случайная* - доверьтесь выбору бота"
+        "🧠 *Фокус* - для концентрации и ментального баланса\n\n"
+        "💡 *Каждый день новая практика в каждой категории!*"
     )
     
     try:
@@ -654,8 +706,8 @@ def daily_technique(message):
                         "Выберите тип техники:\n\n"
                         "🫁 Дыхание - для успокоения\n"
                         "💪 Упражнение - для снятия напряжения\n"
-                        "🧠 Фокус - для концентрации\n"
-                        "🎲 Случайная - доверьтесь выбору бота",
+                        "🧠 Фокус - для концентрации\n\n"
+                        "💡 Каждый день новая практика в каждой категории!",
                         reply_markup=technique_type_keyboard)
 
 def send_technique(message, tech_type=None):
@@ -664,17 +716,17 @@ def send_technique(message, tech_type=None):
         bot.send_message(message.chat.id, "📚 Техники временно недоступны. Мы работаем над этим!", reply_markup=back_keyboard)
         return
     
-    # Выбираем технику
-    if tech_type:
-        # Фильтруем по типу
-        filtered_techniques = [t for t in techniques_list if t.get('type') == tech_type]
-        if filtered_techniques:
-            technique = random.choice(filtered_techniques)
-        else:
-            technique = random.choice(techniques_list)
-    else:
-        # Случайная техника
-        technique = random.choice(techniques_list)
+    # Проверяем, что tech_type указан
+    if not tech_type:
+        bot.send_message(message.chat.id, "Пожалуйста, выберите категорию техники.", reply_markup=technique_type_keyboard)
+        return
+    
+    # Получаем дневную технику для категории
+    technique = get_daily_technique(tech_type)
+    
+    if not technique:
+        bot.send_message(message.chat.id, f"❌ Не найдено техник в категории '{tech_type}'.", reply_markup=back_keyboard)
+        return
     
     tech_type = technique.get('type', 'другое')
     
@@ -722,7 +774,7 @@ def send_technique(message, tech_type=None):
         )
         bot.send_message(message.chat.id, simple_response, reply_markup=back_keyboard)
 
-@bot.message_handler(func=lambda message: message.text in ["🫁 Дыхание", "💪 Упражнение", "🧠 Фокус", "🎲 Случайная техника"])
+@bot.message_handler(func=lambda message: message.text in ["🫁 Дыхание", "💪 Упражнение", "🧠 Фокус"])
 def choose_technique_type(message):
     """Обработка выбора типа техники"""
     user_id = message.from_user.id
@@ -734,12 +786,14 @@ def choose_technique_type(message):
     type_map = {
         "🫁 Дыхание": "дыхание",
         "💪 Упражнение": "упражнение",
-        "🧠 Фокус": "фокус",
-        "🎲 Случайная техника": None
+        "🧠 Фокус": "фокус"
     }
     
     tech_type = type_map.get(message.text)
-    send_technique(message, tech_type)
+    if tech_type:
+        send_technique(message, tech_type)
+    else:
+        bot.send_message(message.chat.id, "Пожалуйста, выберите категорию техники.", reply_markup=technique_type_keyboard)
 
 @bot.message_handler(func=lambda message: message.text == "💰 ПОДПИСКА")
 def subscription_menu(message):
