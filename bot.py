@@ -7,7 +7,52 @@ import random
 import os
 from dotenv import load_dotenv
 from database import add_user, get_user_stats, update_user_stats, check_subscription, save_payment, update_payment
-from payment import create_payment, check_payment
+from payment import create_payment, check_payment, check_payment_with_details
+
+# ============== АВТОМАТИЧЕСКОЕ СОЗДАНИЕ ТАБЛИЦ ==============
+def init_database():
+    """Создаёт все таблицы если их нет"""
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    
+    print("🔧 Проверяю базу данных...")
+    
+    # 1. Таблица users
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            first_name TEXT,
+            subscription_end DATE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # 2. Таблица payments (ВАЖНО!)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS payments (
+            payment_id TEXT PRIMARY KEY,
+            user_id INTEGER,
+            amount REAL,
+            period_days INTEGER,
+            status TEXT DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (user_id)
+        )
+    ''')
+    
+    conn.commit()
+    
+    # Проверяем что создалось
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    tables = cursor.fetchall()
+    print(f"✅ Таблицы в базе: {tables}")
+    
+    conn.close()
+
+# Запускаем создание таблиц сразу при импорте
+init_database()
+# ============== КОНЕЦ СОЗДАНИЯ ТАБЛИЦ ==============
 
 # Загружаем переменные окружения из .env
 load_dotenv()
@@ -15,6 +60,12 @@ load_dotenv()
 # Настройки
 TOKEN = os.getenv('BOT_TOKEN')
 bot = telebot.TeleBot(TOKEN)
+
+# Увеличиваем таймауты для Railway
+import telebot.apihelper
+telebot.apihelper.READ_TIMEOUT = 35
+telebot.apihelper.CONNECT_TIMEOUT = 10
+bot.skip_pending = True  # пропускаем старые сообщения
 
 # Загрузка техник
 with open('techniques.json', 'r', encoding='utf-8') as f:
@@ -178,6 +229,8 @@ def user_profile(message):
     
     bot.send_message(message.chat.id, response, reply_markup=back_keyboard)
 
+# =================== АДМИН-КОМАНДЫ ===================
+
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
     """Панель администратора"""
@@ -213,16 +266,16 @@ def admin_callback(call):
         bot.answer_callback_query(call.id, f"Найдено {len(payments)} платежей")
         
         if payments:
-            message = "📋 *Последние платежи:*\n\n"
+            message_text = "📋 *Последние платежи:*\n\n"
             for p in payments[:10]:  # первые 10
-                message += f"• {p['user_id']} - {p['amount']}₽ - {p['payment_id'][:8]}...\n"
+                message_text += f"• {p['user_id']} - {p['amount']}₽ - {p['payment_id'][:8]}...\n"
             
             if len(payments) > 10:
-                message += f"\n... и еще {len(payments) - 10}"
+                message_text += f"\n... и еще {len(payments) - 10}"
         else:
-            message = "🤷‍♂️ *Нет платежей за последние сутки*"
+            message_text = "🤷‍♂️ *Нет платежей за последние сутки*"
         
-        bot.send_message(call.message.chat.id, message, parse_mode='Markdown')
+        bot.send_message(call.message.chat.id, message_text, parse_mode='Markdown')
     
     elif call.data == "admin_stats":
         from database import Database
@@ -287,6 +340,204 @@ def activate_manual(message):
             
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ Ошибка: {str(e)}")
+
+@bot.message_handler(commands=['check_sub'])
+def check_subscription_command(message):
+    """Проверка подписки пользователя"""
+    user_id = message.from_user.id
+    from database import check_subscription
+    
+    if check_subscription(user_id):
+        bot.send_message(message.chat.id, "✅ Ваша подписка активна!")
+    else:
+        bot.send_message(message.chat.id, "❌ Подписка не активна")
+
+# =================== НОВЫЕ АДМИН-КОМАНДЫ ДЛЯ ОТЛАДКИ ===================
+
+@bot.message_handler(commands=['allpayments'])
+def show_all_payments(message):
+    """Показать все платежи в системе"""
+    if str(message.from_user.id) != os.getenv('ADMIN_ID'):
+        return
+    
+    import sqlite3
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    
+    # Получаем ВСЕ платежи
+    cursor.execute("SELECT * FROM payments ORDER BY created_at DESC")
+    all_payments = cursor.fetchall()
+    
+    response = f"📋 *ВСЕ ПЛАТЕЖИ В СИСТЕМЕ ({len(all_payments)}):*\n\n"
+    
+    if not all_payments:
+        response += "❌ Нет ни одного платежа в базе"
+    else:
+        for p in all_payments:
+            payment_id, user_id, amount, days, status, created = p
+            status_icon = "✅" if status == 'succeeded' else "🔄" if status == 'pending' else "❌"
+            response += f"{status_icon} `{payment_id[:12]}...`\n"
+            response += f"   👤 {user_id} | 💰 {amount}₽ | 📅 {days}д | 🏷 {status}\n"
+            response += f"   🕐 {created[:19] if created else ''}\n\n"
+    
+    conn.close()
+    
+    bot.send_message(message.chat.id, response, parse_mode='Markdown')
+
+@bot.message_handler(commands=['dbcheck'])
+def check_database(message):
+    """Проверка структуры базы данных"""
+    if str(message.from_user.id) != os.getenv('ADMIN_ID'):
+        return
+    
+    import sqlite3
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    
+    response = "🗃️ *ПРОВЕРКА БАЗЫ ДАННЫХ*\n\n"
+    
+    # 1. Проверяем таблицы
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    tables = cursor.fetchall()
+    
+    response += f"📊 *Таблицы ({len(tables)}):*\n"
+    for table in tables:
+        cursor.execute(f"SELECT COUNT(*) FROM {table[0]}")
+        count = cursor.fetchone()[0]
+        response += f"• `{table[0]}` - {count} записей\n"
+    
+    response += "\n"
+    
+    # 2. Проверяем структуру таблицы payments
+    try:
+        cursor.execute("PRAGMA table_info(payments)")
+        columns = cursor.fetchall()
+        response += "📋 *Структура таблицы payments:*\n"
+        for col in columns:
+            response += f"• `{col[1]}` ({col[2]})\n"
+    except:
+        response += "❌ Таблица `payments` не существует!\n"
+    
+    response += "\n"
+    
+    # 3. Проверяем последние 5 платежей
+    try:
+        cursor.execute("SELECT payment_id, user_id, status FROM payments ORDER BY created_at DESC LIMIT 5")
+        recent = cursor.fetchall()
+        response += "🕐 *Последние платежи:*\n"
+        for p in recent:
+            response += f"• `{p[0][:12]}...` - 👤{p[1]} - {p[2]}\n"
+    except:
+        response += "❌ Не удалось получить платежи\n"
+    
+    conn.close()
+    
+    bot.send_message(message.chat.id, response, parse_mode='Markdown')
+
+@bot.message_handler(commands=['activatenow'])
+def activate_now(message):
+    """Экстренная активация подписки"""
+    if str(message.from_user.id) != os.getenv('ADMIN_ID'):
+        return
+    
+    import sqlite3
+    from datetime import datetime, timedelta
+    
+    user_id = 360171560  # Ваш ID
+    days = 365  # 12 месяцев
+    
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    
+    # 1. Добавляем пользователя если нет
+    cursor.execute(
+        "INSERT OR IGNORE INTO users (user_id, username, first_name) VALUES (?, ?, ?)",
+        (user_id, 'avllks', 'Александр')
+    )
+    
+    # 2. Активируем подписку
+    new_end = (datetime.now() + timedelta(days=days)).date().isoformat()
+    cursor.execute(
+        "UPDATE users SET subscription_end = ? WHERE user_id = ?",
+        (new_end, user_id)
+    )
+    
+    # 3. Добавляем запись о "платеже"
+    payment_id = f"manual_{int(datetime.now().timestamp())}"
+    cursor.execute(
+        """INSERT INTO payments (payment_id, user_id, amount, period_days, status) 
+           VALUES (?, ?, ?, ?, ?)""",
+        (payment_id, user_id, 799.00, days, 'succeeded')
+    )
+    
+    conn.commit()
+    
+    # 4. Проверяем
+    cursor.execute("SELECT subscription_end FROM users WHERE user_id = ?", (user_id,))
+    result = cursor.fetchone()
+    
+    conn.close()
+    
+    if result and result[0]:
+        bot.send_message(
+            message.chat.id,
+            f"✅ *ПОДПИСКА АКТИВИРОВАНА!*\n\n"
+            f"👤 Пользователь: `{user_id}`\n"
+            f"📅 Срок: {days} дней\n"
+            f"🏁 Действует до: `{result[0]}`\n"
+            f"💳 Платеж: `{payment_id[:12]}...`\n\n"
+            f"*Теперь нажмите «🌟 ТЕХНИКА НА СЕГОДНЯ»*",
+            parse_mode='Markdown'
+        )
+    else:
+        bot.send_message(message.chat.id, "❌ Что-то пошло не так")
+
+@bot.message_handler(commands=['mystatus'])
+def my_status(message):
+    """Детальная проверка статуса"""
+    user_id = message.from_user.id
+    
+    import sqlite3
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    
+    response = "🔍 *ВАШ СТАТУС*\n\n"
+    
+    # 1. Проверяем пользователя
+    cursor.execute("SELECT subscription_end FROM users WHERE user_id = ?", (user_id,))
+    user = cursor.fetchone()
+    
+    if user:
+        sub_end = user[0]
+        if sub_end:
+            from datetime import date
+            end_date = date.fromisoformat(sub_end)
+            today = date.today()
+            
+            if end_date >= today:
+                response += f"✅ *Подписка АКТИВНА*\n"
+                response += f"Действует до: `{end_date}`\n"
+                response += f"Осталось дней: `{(end_date - today).days}`\n"
+            else:
+                response += f"❌ *Подписка ИСТЕКЛА*\n"
+                response += f"Истекла: `{end_date}`\n"
+        else:
+            response += "❌ *Подписка НЕ АКТИВИРОВАНА*\n"
+    else:
+        response += "❌ *Вы не найдены в базе*\n"
+    
+    # 2. Проверяем платежи
+    cursor.execute("SELECT payment_id, amount, status FROM payments WHERE user_id = ?", (user_id,))
+    payments = cursor.fetchall()
+    
+    response += f"\n💳 *Платежи ({len(payments)}):*\n"
+    for p in payments:
+        status_icon = "✅" if p[2] == 'succeeded' else "🔄" if p[2] == 'pending' else "❌"
+        response += f"{status_icon} `{p[0][:12]}...` - {p[1]}₽ - {p[2]}\n"
+    
+    conn.close()
+    
+    bot.send_message(message.chat.id, response, parse_mode='Markdown')
 
 # =================== НАВИГАЦИЯ "НАЗАД" ===================
 
@@ -411,8 +662,6 @@ def check_payment_status(message):
         reply_markup=main_menu_keyboard
     )
 
-# =================== ЗАПУСК БОТА ===================
-
 # =================== АВТОМАТИЧЕСКАЯ ПРОВЕРКА ПЛАТЕЖЕЙ ===================
 
 import threading
@@ -446,14 +695,21 @@ class PaymentProcessor:
         
         try:
             # 1. Проверяем статус в ЮКассе
-            from payment import check_payment_with_details
             payment_info = check_payment_with_details(payment_id)
             
-            if payment_info.get('status') == 'succeeded':
+            # ДЕБАГ: выводим что получили
+            logger.info(f"DEBUG: Результат проверки: {payment_info}")
+            
+            if payment_info is None:
+                logger.error(f"🔄 check_payment_with_details вернул None для {payment_id}")
+                return False
+                
+            status = payment_info.get('status')
+            
+            if status == 'succeeded':
                 logger.info(f"✅ Платеж {payment_id} успешен!")
                 
                 # 2. Активируем подписку в БД
-                from database import update_payment
                 update_payment(payment_id, 'succeeded')
                 
                 # 3. Уведомляем пользователя
@@ -461,19 +717,21 @@ class PaymentProcessor:
                 
                 return True
                 
-            elif payment_info.get('status') in ['canceled', 'failed']:
-                logger.warning(f"❌ Платеж {payment_id} отменен: {payment_info.get('status')}")
+            elif status in ['canceled', 'failed']:
+                logger.warning(f"❌ Платеж {payment_id} отменен: {status}")
                 
-                from database import update_payment
-                update_payment(payment_id, payment_info['status'])
+                update_payment(payment_id, status)
                 
-                self.notify_user_failure(user_id, payment_id, payment_info['status'])
+                self.notify_user_failure(user_id, payment_id, status)
                 
-            elif payment_info.get('status') == 'error':
+            elif status == 'not_found':
+                logger.error(f"🔍 Платеж {payment_id} не найден в ЮКассе")
+                
+            elif status == 'error':
                 logger.error(f"⚠️ Ошибка при проверке платежа {payment_id}: {payment_info.get('error')}")
                 
             else:
-                logger.info(f"⏳ Платеж {payment_id} еще в процессе: {payment_info.get('status')}")
+                logger.info(f"⏳ Платеж {payment_id} еще в процессе: {status}")
                 
         except Exception as e:
             logger.error(f"🚨 Критическая ошибка обработки платежа {payment_id}: {e}")
@@ -538,94 +796,4 @@ class PaymentProcessor:
             )
             
         except Exception as e:
-            logger.error(f"Не удалось отправить уведомление об ошибке: {e}")
-    
-    def check_all_pending_payments(self):
-        """Проверяет все pending платежи"""
-        try:
-            from database import get_recent_payments
-            # Проверяем платежи за последние 2 часа (на случай долгих оплат)
-            pending_payments = get_recent_payments(minutes=120)
-            
-            if pending_payments:
-                logger.info(f"📊 Найдено {len(pending_payments)} платежей для проверки")
-                
-                successful = 0
-                for payment in pending_payments:
-                    if self.process_single_payment(payment):
-                        successful += 1
-                
-                if successful > 0:
-                    logger.info(f"✅ Обработано {successful} успешных платежей")
-            
-            return len(pending_payments)
-            
-        except Exception as e:
-            logger.error(f"Ошибка при проверке платежей: {e}")
-            return 0
-    
-    def payment_check_loop(self):
-        """Основной цикл проверки платежей"""
-        logger.info("🚀 Запущен цикл проверки платежей")
-        
-        while self.running:
-            try:
-                checked_count = self.check_all_pending_payments()
-                
-                # Логируем только если были платежи или прошло 10 минут
-                if checked_count > 0 or int(time.time()) % 600 < 30:
-                    logger.info(f"⏰ Следующая проверка через {self.check_interval} сек...")
-                
-                time.sleep(self.check_interval)
-                
-            except KeyboardInterrupt:
-                logger.info("Остановка по запросу пользователя")
-                break
-            except Exception as e:
-                logger.error(f"Критическая ошибка в цикле: {e}")
-                time.sleep(60)  # Ждем минуту при критической ошибке
-    
-    def start(self):
-        """Запускает процессор в отдельном потоке"""
-        thread = threading.Thread(target=self.payment_check_loop, daemon=True)
-        thread.start()
-        logger.info("✅ Процессор платежей запущен в отдельном потоке")
-        return thread
-
-# Создаем и запускаем процессор платежей
-payment_processor = PaymentProcessor(bot)
-payment_processor.start()
-
-if __name__ == '__main__':
-    print("=" * 50)
-    print("🤖 АНТИ-ВЫГОРАНИЕ БОТ ЗАПУЩЕН")
-    print("=" * 50)
-    print(f"Время запуска: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"Режим: {'РАБОЧИЙ' if TOKEN else 'ТЕСТОВЫЙ'}")
-    print(f"Проверка платежей: АКТИВНА (каждые 30 секунд)")
-    print("=" * 50)
-    
-    # Запускаем бесконечный цикл с перезапуском при ошибках
-    restart_delay = 10  # секунд
-    
-    while True:
-        try:
-            # Настройки для Railway (увеличиваем таймауты)
-            import telebot.apihelper
-            telebot.apihelper.READ_TIMEOUT = 30
-            telebot.apihelper.CONNECT_TIMEOUT = 10
-            
-            print("🔄 Подключаюсь к Telegram API...")
-            bot.infinity_polling(
-                timeout=30,
-                long_polling_timeout=30,
-                skip_pending=True  # пропускаем старые сообщения
-            )
-            
-        except Exception as e:
-            print(f"⚠️ Бот упал с ошибкой: {e}")
-            print(f"🔄 Перезапуск через {restart_delay} секунд...")
-            time.sleep(restart_delay)
-            
-            # Увеличиваем задержку при повторных ошибках (макс 60 сек)
-            restart_delay = min(restart_delay * 1.5, 60)
+            logger.error(f"Не удалось отправить уведомление об ошибке:
