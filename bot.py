@@ -796,4 +796,4 @@ class PaymentProcessor:
             )
             
         except Exception as e:
-            logger.error(f"Не удалось отправить уведомление об ошибке:
+            logger.error(f"Не удалось отправить уведомление об ошибке: {e}")
