@@ -245,6 +245,97 @@ def get_all_pending_payments():
     finally:
         conn.close()
 
+def get_all_payments():
+    """Получение всех платежей из БД"""
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT payment_id, user_id, amount, period_days, status, created_at FROM payments ORDER BY created_at DESC"
+        )
+        return cursor.fetchall()
+    except Exception as e:
+        logger.error(f"Ошибка получения всех платежей: {e}")
+        return []
+    finally:
+        conn.close()
+
+def find_payment_by_id(payment_id):
+    """Поиск платежа по ID"""
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT payment_id, user_id, amount, period_days, status, created_at FROM payments WHERE payment_id = ?",
+            (payment_id,)
+        )
+        return cursor.fetchone()
+    except Exception as e:
+        logger.error(f"Ошибка поиска платежа: {e}")
+        return None
+    finally:
+        conn.close()
+
+def activate_by_payment_id(payment_id, user_id=None, period_days=None):
+    """Активация подписки по payment_id из ЮКассы"""
+    try:
+        from payment import check_payment_with_details
+        
+        # Проверяем платеж в ЮКассе
+        payment_info = check_payment_with_details(payment_id)
+        
+        if not payment_info:
+            return False, "Платеж не найден в ЮКассе"
+        
+        if payment_info.get('status') != 'succeeded':
+            return False, f"Платеж не успешен. Статус: {payment_info.get('status')}"
+        
+        # Если платеж есть в БД, используем данные из БД
+        db_payment = find_payment_by_id(payment_id)
+        
+        if db_payment:
+            db_payment_id, db_user_id, db_amount, db_period_days, db_status, db_created_at = db_payment
+            user_id = db_user_id
+            period_days = db_period_days
+        else:
+            # Если платежа нет в БД, нужно получить user_id из метаданных
+            metadata = payment_info.get('metadata', {})
+            user_id_from_meta = metadata.get('user_id')
+            
+            if not user_id and user_id_from_meta:
+                user_id = user_id_from_meta
+            
+            if not user_id:
+                return False, "Не удалось определить user_id. Платеж не найден в БД и нет метаданных."
+            
+            if not period_days:
+                # Определяем период по сумме
+                amount = float(payment_info.get('amount', 0))
+                if amount >= 799:
+                    period_days = 365
+                elif amount >= 269:
+                    period_days = 90
+                elif amount >= 99:
+                    period_days = 30
+                else:
+                    period_days = 30  # По умолчанию
+            
+            # Сохраняем платеж в БД
+            save_payment_to_db(user_id, payment_id, float(payment_info.get('amount', 0)), period_days)
+        
+        # Активируем подписку
+        if activate_subscription_with_notification(user_id, period_days, payment_id):
+            update_payment_status(payment_id, 'succeeded')
+            return True, f"Подписка активирована для user_id={user_id}, дней={period_days}"
+        else:
+            return False, "Не удалось активировать подписку"
+            
+    except ImportError:
+        return False, "Модуль payment не найден"
+    except Exception as e:
+        logger.error(f"Ошибка активации по payment_id: {e}")
+        return False, f"Ошибка: {str(e)}"
+
 def activate_subscription_with_notification(user_id, period_days, payment_id=None):
     """Активация подписки с уведомлением пользователя"""
     try:
@@ -398,6 +489,9 @@ def send_welcome(message):
 @bot.message_handler(commands=['help'])
 def send_help(message):
     """Помощь"""
+    user_id = message.from_user.id
+    is_admin = str(user_id) == ADMIN_ID
+    
     help_text = (
         "🤖 *Анти-Выгорание Бот*\n\n"
         "📋 *Доступные команды:*\n\n"
@@ -406,8 +500,22 @@ def send_help(message):
         "• /profile - Ваш профиль\n"
         "• /check_sub - Проверить подписку\n"
         "• /check_payment - Проверить платеж\n"
-        "• /test_payment - Тестовая активация подписки\n\n"
-        "📱 *Основные функции:*\n"
+    )
+    
+    if is_admin:
+        help_text += (
+            "\n👨‍💼 *Админ-команды:*\n"
+            "• /admin - Панель администратора\n"
+            "• /all_payments - Все платежи в БД\n"
+            "• /activate_payments - Активировать pending платежи\n"
+            "• /activate_by_id <payment_id> - Активировать по ID из ЮКассы\n"
+            "• /test_payment - Тестовая активация подписки\n"
+        )
+    else:
+        help_text += "• /test_payment - Тестовая активация подписки\n"
+    
+    help_text += (
+        "\n📱 *Основные функции:*\n"
         "• 🌟 Техника на каждый день (требуется подписка)\n"
         "• 💰 Подписка на доступ ко всем техникам\n"
         "• 👤 Профиль со статистикой\n\n"
@@ -961,6 +1069,54 @@ def profile_command(message):
     """Команда профиля"""
     user_profile(message)
 
+@bot.message_handler(commands=['all_payments'])
+def show_all_payments_command(message):
+    """Показать все платежи в БД (только для админа)"""
+    if str(message.from_user.id) != ADMIN_ID:
+        bot.send_message(message.chat.id, "❌ Доступ запрещен. Эта команда только для администратора.")
+        return
+    
+    try:
+        payments = get_all_payments()
+        
+        if not payments:
+            bot.send_message(message.chat.id, "📊 В базе данных нет платежей.")
+            return
+        
+        # Группируем по статусам
+        by_status = {}
+        for payment_id, user_id, amount, period_days, status, created_at in payments:
+            if status not in by_status:
+                by_status[status] = []
+            by_status[status].append((payment_id, user_id, amount, period_days, created_at))
+        
+        response = "📊 *ВСЕ ПЛАТЕЖИ В БД:*\n\n"
+        response += f"Всего: {len(payments)}\n\n"
+        
+        for status, status_payments in by_status.items():
+            status_emoji = "✅" if status == "succeeded" else "⏳" if status == "pending" else "❌"
+            response += f"{status_emoji} *{status.upper()}:* {len(status_payments)}\n"
+        
+        response += "\n*Детали по статусам:*\n\n"
+        
+        # Показываем последние 10 платежей
+        for payment_id, user_id, amount, period_days, status, created_at in payments[:10]:
+            status_emoji = "✅" if status == "succeeded" else "⏳" if status == "pending" else "❌"
+            response += f"{status_emoji} {payment_id[:16]}...\n"
+            response += f"   👤 {user_id} | 💰 {amount}₽ | 📅 {period_days}д | {created_at}\n\n"
+        
+        if len(payments) > 10:
+            response += f"\n... и еще {len(payments) - 10} платежей"
+        
+        try:
+            bot.send_message(message.chat.id, response, parse_mode='Markdown')
+        except:
+            bot.send_message(message.chat.id, response.replace('*', ''))
+            
+    except Exception as e:
+        logger.error(f"Ошибка в show_all_payments_command: {e}")
+        bot.send_message(message.chat.id, f"❌ Ошибка: {str(e)}")
+
 @bot.message_handler(commands=['activate_payments'])
 def activate_pending_payments_command(message):
     """Команда для активации всех пропущенных платежей (только для админа)"""
@@ -1042,6 +1198,58 @@ def activate_pending_payments_command(message):
             
     except Exception as e:
         logger.error(f"Критическая ошибка в activate_pending_payments_command: {e}")
+        bot.send_message(message.chat.id, f"❌ Произошла ошибка: {str(e)}")
+
+@bot.message_handler(commands=['activate_by_id'])
+def activate_by_payment_id_command(message):
+    """Активация подписки по payment_id из ЮКассы (только для админа)
+    
+    Использование: /activate_by_id <payment_id> [user_id] [period_days]
+    Пример: /activate_by_id 2c8a3f5e-1234-5678-9abc-def012345678
+    """
+    if str(message.from_user.id) != ADMIN_ID:
+        bot.send_message(message.chat.id, "❌ Доступ запрещен. Эта команда только для администратора.")
+        return
+    
+    try:
+        # Парсим команду
+        parts = message.text.split()
+        if len(parts) < 2:
+            bot.send_message(
+                message.chat.id,
+                "❌ Неверный формат команды.\n\n"
+                "Использование: /activate_by_id <payment_id> [user_id] [period_days]\n\n"
+                "Примеры:\n"
+                "/activate_by_id 2c8a3f5e-1234-5678-9abc-def012345678\n"
+                "/activate_by_id 2c8a3f5e-1234-5678-9abc-def012345678 123456789 30"
+            )
+            return
+        
+        payment_id = parts[1]
+        user_id = int(parts[2]) if len(parts) > 2 else None
+        period_days = int(parts[3]) if len(parts) > 3 else None
+        
+        bot.send_message(
+            message.chat.id,
+            f"🔄 Проверяю платеж {payment_id[:16]}...\nПожалуйста, подождите."
+        )
+        
+        success, result_message = activate_by_payment_id(payment_id, user_id, period_days)
+        
+        if success:
+            response = f"✅ *УСПЕШНО!*\n\n{result_message}"
+        else:
+            response = f"❌ *ОШИБКА*\n\n{result_message}"
+        
+        try:
+            bot.send_message(message.chat.id, response, parse_mode='Markdown')
+        except:
+            bot.send_message(message.chat.id, response.replace('*', ''))
+            
+    except ValueError as e:
+        bot.send_message(message.chat.id, f"❌ Ошибка формата: {str(e)}")
+    except Exception as e:
+        logger.error(f"Ошибка в activate_by_payment_id_command: {e}")
         bot.send_message(message.chat.id, f"❌ Произошла ошибка: {str(e)}")
 
 # ============== АДМИН КОМАНДЫ ==============
