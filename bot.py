@@ -509,7 +509,8 @@ def send_help(message):
             "• /all_payments - Все платежи в БД\n"
             "• /find_payments [days] - Найти платежи в ЮКассе\n"
             "• /activate_payments - Активировать pending платежи\n"
-            "• /activate_by_id <payment_id> - Активировать по ID из ЮКассы\n"
+            "• /activate_by_id <payment_id> - Активировать по ID\n"
+            "• /activate_many <id1> <id2> ... - Массовая активация\n"
             "• /test_payment - Тестовая активация подписки\n"
         )
     else:
@@ -1299,11 +1300,29 @@ def find_payments_from_yookassa_command(message):
                 bot.send_message(message.chat.id, response.replace('*', ''))
                 
         except ImportError:
-            bot.send_message(
-                message.chat.id,
-                "❌ Модуль payment не найден или функция get_payments_by_date_range не реализована.\n\n"
-                "💡 Используйте команду /activate_by_id с payment_id из личного кабинета ЮКассы."
+            help_text = (
+                "❌ Автоматический поиск платежей недоступен.\n\n"
+                "📋 *КАК НАЙТИ И АКТИВИРОВАТЬ ПЛАТЕЖИ:*\n\n"
+                "1️⃣ Войдите в личный кабинет ЮКассы:\n"
+                "   https://yookassa.ru/my\n\n"
+                "2️⃣ Перейдите в раздел \"Платежи\"\n\n"
+                "3️⃣ Найдите успешные платежи за последние дни\n\n"
+                "4️⃣ Скопируйте payment_id (ID платежа)\n"
+                "   Это длинная строка вида:\n"
+                "   `2c8a3f5e-1234-5678-9abc-def012345678`\n\n"
+                "5️⃣ Активируйте подписку:\n"
+                "   `/activate_by_id <payment_id>`\n\n"
+                "💡 *Пример:*\n"
+                "`/activate_by_id 2c8a3f5e-1234-5678-9abc-def012345678`\n\n"
+                "📝 *Для массовой активации нескольких платежей:*\n"
+                "`/activate_many <id1> <id2> <id3>`\n\n"
+                "💡 *Пример:*\n"
+                "`/activate_many 2c8a3f5e-1234-5678-9abc-def012345678 3d9b4g6f-2345-6789-bcde-ef0123456789`"
             )
+            try:
+                bot.send_message(message.chat.id, help_text, parse_mode='Markdown')
+            except:
+                bot.send_message(message.chat.id, help_text.replace('*', '').replace('`', ''))
         except Exception as e:
             logger.error(f"Ошибка в find_payments_from_yookassa_command: {e}")
             bot.send_message(
@@ -1316,6 +1335,82 @@ def find_payments_from_yookassa_command(message):
         bot.send_message(message.chat.id, "❌ Неверный формат. Используйте: /find_payments [days]")
     except Exception as e:
         logger.error(f"Ошибка в find_payments_from_yookassa_command: {e}")
+        bot.send_message(message.chat.id, f"❌ Произошла ошибка: {str(e)}")
+
+@bot.message_handler(commands=['activate_many'])
+def activate_many_payments_command(message):
+    """Массовая активация подписок по нескольким payment_id (только для админа)
+    
+    Использование: /activate_many <payment_id1> <payment_id2> <payment_id3> ...
+    Пример: /activate_many 2c8a3f5e-1234-5678-9abc-def012345678 3d9b4g6f-2345-6789-bcde-ef0123456789
+    """
+    if str(message.from_user.id) != ADMIN_ID:
+        bot.send_message(message.chat.id, "❌ Доступ запрещен. Эта команда только для администратора.")
+        return
+    
+    try:
+        # Парсим команду
+        parts = message.text.split()
+        if len(parts) < 2:
+            bot.send_message(
+                message.chat.id,
+                "❌ Неверный формат команды.\n\n"
+                "Использование: /activate_many <payment_id1> <payment_id2> ...\n\n"
+                "Пример:\n"
+                "/activate_many 2c8a3f5e-1234-5678-9abc-def012345678 3d9b4g6f-2345-6789-bcde-ef0123456789"
+            )
+            return
+        
+        payment_ids = parts[1:]
+        
+        bot.send_message(
+            message.chat.id,
+            f"🔄 Начинаю активацию {len(payment_ids)} платежей...\nПожалуйста, подождите."
+        )
+        
+        results = []
+        activated = 0
+        errors = []
+        
+        for payment_id in payment_ids:
+            try:
+                success, result_message = activate_by_payment_id(payment_id)
+                if success:
+                    activated += 1
+                    results.append(f"✅ {payment_id[:16]}... - активирован")
+                else:
+                    errors.append(f"❌ {payment_id[:16]}... - {result_message[:50]}")
+            except Exception as e:
+                errors.append(f"❌ {payment_id[:16]}... - ошибка: {str(e)[:50]}")
+        
+        # Формируем отчет
+        response = (
+            f"📊 *РЕЗУЛЬТАТЫ МАССОВОЙ АКТИВАЦИИ:*\n\n"
+            f"✅ Активировано: {activated} из {len(payment_ids)}\n\n"
+        )
+        
+        if results:
+            response += "*Успешно активированные:*\n"
+            for result in results[:10]:
+                response += f"{result}\n"
+            if len(results) > 10:
+                response += f"... и еще {len(results) - 10}\n"
+            response += "\n"
+        
+        if errors:
+            response += "*Ошибки:*\n"
+            for error in errors[:10]:
+                response += f"{error}\n"
+            if len(errors) > 10:
+                response += f"... и еще {len(errors) - 10}\n"
+        
+        try:
+            bot.send_message(message.chat.id, response, parse_mode='Markdown')
+        except:
+            bot.send_message(message.chat.id, response.replace('*', ''))
+            
+    except Exception as e:
+        logger.error(f"Ошибка в activate_many_payments_command: {e}")
         bot.send_message(message.chat.id, f"❌ Произошла ошибка: {str(e)}")
 
 @bot.message_handler(commands=['activate_by_id'])

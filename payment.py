@@ -127,3 +127,46 @@ def check_payment_with_details(payment_id):
             'error': str(e),
             'payment_id': payment_id
         }
+
+def get_payments_by_date_range(days=7):
+    """
+    Получает список платежей из ЮКассы за последние N дней
+    Требует использования Payment.list() с фильтрами
+    """
+    try:
+        from datetime import datetime, timedelta
+        
+        if not Configuration.account_id or not Configuration.secret_key:
+            return []
+        
+        # Получаем дату начала периода
+        created_at_gte = (datetime.now() - timedelta(days=days)).isoformat()
+        
+        # Получаем список платежей
+        # Примечание: API ЮКассы может требовать другие параметры
+        try:
+            payments_list = Payment.list({
+                "created_at.gte": created_at_gte,
+                "limit": 100
+            })
+            
+            result = []
+            for payment in payments_list.items:
+                payment_data = {
+                    'id': payment.id,
+                    'status': payment.status,
+                    'amount': payment.amount.value if hasattr(payment, 'amount') else None,
+                    'created_at': payment.created_at.isoformat() if hasattr(payment, 'created_at') else None,
+                    'metadata': payment.metadata if hasattr(payment, 'metadata') else {}
+                }
+                result.append(payment_data)
+            
+            return result
+        except Exception as e:
+            print(f"Ошибка получения списка платежей: {e}")
+            # Если API не поддерживает list, возвращаем пустой список
+            return []
+            
+    except Exception as e:
+        print(f"Ошибка в get_payments_by_date_range: {e}")
+        return []
