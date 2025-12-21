@@ -230,6 +230,75 @@ def update_payment_status(payment_id, status):
     finally:
         conn.close()
 
+def get_all_pending_payments():
+    """Получение всех pending платежей"""
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT payment_id, user_id, amount, period_days, created_at FROM payments WHERE status = 'pending' ORDER BY created_at DESC"
+        )
+        return cursor.fetchall()
+    except Exception as e:
+        logger.error(f"Ошибка получения pending платежей: {e}")
+        return []
+    finally:
+        conn.close()
+
+def activate_subscription_with_notification(user_id, period_days, payment_id=None):
+    """Активация подписки с уведомлением пользователя"""
+    try:
+        # Активируем подписку
+        if add_subscription_to_db(user_id, period_days):
+            # Отправляем уведомление пользователю
+            subscription_end, days_left = get_subscription_info(user_id)
+            
+            notification_text = (
+                "🎉 *ПОДПИСКА АКТИВИРОВАНА!*\n\n"
+                f"✅ Ваша подписка успешно активирована!\n"
+                f"📅 Дней доступа: {days_left}\n"
+            )
+            
+            if subscription_end:
+                notification_text += f"🏁 Действует до: {subscription_end.strftime('%d.%m.%Y')}\n\n"
+            
+            notification_text += (
+                "✨ Теперь вам доступны:\n"
+                "• 🌟 Техника на каждый день\n"
+                "• 📚 Полная библиотека техник\n"
+                "• 📊 Статистика и прогресс\n\n"
+                "Нажмите «🌟 ТЕХНИКА НА СЕГОДНЯ» чтобы начать!"
+            )
+            
+            try:
+                bot.send_message(user_id, notification_text, parse_mode='Markdown', reply_markup=main_menu_keyboard)
+            except:
+                # Упрощенная версия без Markdown
+                simple_text = (
+                    "🎉 ПОДПИСКА АКТИВИРОВАНА!\n\n"
+                    f"✅ Ваша подписка успешно активирована!\n"
+                    f"📅 Дней доступа: {days_left}\n"
+                )
+                if subscription_end:
+                    simple_text += f"🏁 Действует до: {subscription_end.strftime('%d.%m.%Y')}\n\n"
+                simple_text += (
+                    "✨ Теперь вам доступны:\n"
+                    "• Техника на каждый день\n"
+                    "• Полная библиотека техник\n"
+                    "• Статистика и прогресс\n\n"
+                    "Нажмите «🌟 ТЕХНИКА НА СЕГОДНЯ» чтобы начать!"
+                )
+                bot.send_message(user_id, simple_text, reply_markup=main_menu_keyboard)
+            
+            logger.info(f"✅ Подписка активирована для user_id={user_id}, дней={period_days}")
+            return True
+        else:
+            logger.error(f"❌ Не удалось активировать подписку для user_id={user_id}")
+            return False
+    except Exception as e:
+        logger.error(f"Ошибка активации подписки с уведомлением: {e}")
+        return False
+
 # ============== ЗАГРУЗКА ТЕХНИК ==============
 techniques_list = []
 techniques_by_type = {}
@@ -800,8 +869,10 @@ def check_payment_command(message):
             )
         else:
             # Если платеж успешен, но подписка не активирована
-            add_subscription_to_db(user_id, period_days)
-            response = "🎉 Платеж подтвержден! Подписка активирована!"
+            if activate_subscription_with_notification(user_id, period_days, payment_id):
+                response = "🎉 Платеж подтвержден! Подписка активирована!"
+            else:
+                response = "⚠️ Платеж подтвержден, но возникла ошибка при активации подписки. Обратитесь в поддержку: @avllks"
     
     elif status == 'pending':
         try:
@@ -810,9 +881,11 @@ def check_payment_command(message):
             payment_info_check = check_payment_with_details(payment_id)
             
             if payment_info_check and payment_info_check.get('status') == 'succeeded':
-                add_subscription_to_db(user_id, period_days)
-                update_payment_status(payment_id, 'succeeded')
-                response = "🎉 Платеж подтвержден! Подписка активирована!"
+                if activate_subscription_with_notification(user_id, period_days, payment_id):
+                    update_payment_status(payment_id, 'succeeded')
+                    response = "🎉 Платеж подтвержден! Подписка активирована!"
+                else:
+                    response = "⚠️ Платеж подтвержден, но возникла ошибка при активации подписки. Обратитесь в поддержку: @avllks"
             else:
                 response = (
                     f"⏳ ПЛАТЕЖ В ОБРАБОТКЕ\n\n"
@@ -888,6 +961,89 @@ def profile_command(message):
     """Команда профиля"""
     user_profile(message)
 
+@bot.message_handler(commands=['activate_payments'])
+def activate_pending_payments_command(message):
+    """Команда для активации всех пропущенных платежей (только для админа)"""
+    if str(message.from_user.id) != ADMIN_ID:
+        bot.send_message(message.chat.id, "❌ Доступ запрещен. Эта команда только для администратора.")
+        return
+    
+    try:
+        # Получаем все pending платежи
+        pending_payments = get_all_pending_payments()
+        
+        if not pending_payments:
+            bot.send_message(message.chat.id, "✅ Нет платежей со статусом 'pending' для проверки.")
+            return
+        
+        bot.send_message(
+            message.chat.id,
+            f"🔄 Начинаю проверку {len(pending_payments)} платежей...\n"
+            "Это может занять некоторое время."
+        )
+        
+        checked = 0
+        activated = 0
+        errors = []
+        
+        for payment_id, user_id, amount, period_days, created_at in pending_payments:
+            try:
+                checked += 1
+                
+                # Проверяем статус платежа в ЮКассе
+                try:
+                    from payment import check_payment_with_details
+                    payment_info = check_payment_with_details(payment_id)
+                    
+                    if payment_info and payment_info.get('status') == 'succeeded':
+                        # Активируем подписку с уведомлением
+                        if activate_subscription_with_notification(user_id, period_days, payment_id):
+                            update_payment_status(payment_id, 'succeeded')
+                            activated += 1
+                            logger.info(f"✅ Активирована подписка для payment_id={payment_id}, user_id={user_id}")
+                        else:
+                            errors.append(f"Не удалось активировать подписку для payment_id={payment_id}")
+                    elif payment_info:
+                        logger.info(f"⏳ Платеж {payment_id} еще в статусе: {payment_info.get('status')}")
+                    else:
+                        logger.warning(f"⚠️ Не удалось получить информацию о платеже {payment_id}")
+                        
+                except ImportError:
+                    # Если модуль payment не доступен, пропускаем проверку через API
+                    logger.warning(f"⚠️ Модуль payment не найден, пропускаю проверку {payment_id}")
+                    errors.append(f"Модуль payment не найден для {payment_id}")
+                except Exception as e:
+                    logger.error(f"Ошибка проверки платежа {payment_id}: {e}")
+                    errors.append(f"Ошибка проверки {payment_id}: {str(e)[:50]}")
+                    
+            except Exception as e:
+                logger.error(f"Критическая ошибка обработки платежа {payment_id}: {e}")
+                errors.append(f"Критическая ошибка {payment_id}: {str(e)[:50]}")
+        
+        # Формируем отчет
+        report = (
+            f"📊 *ОТЧЕТ О ПРОВЕРКЕ ПЛАТЕЖЕЙ*\n\n"
+            f"✅ Проверено: {checked}\n"
+            f"🎉 Активировано: {activated}\n"
+        )
+        
+        if errors:
+            report += f"\n⚠️ Ошибок: {len(errors)}\n"
+            if len(errors) <= 5:
+                for error in errors:
+                    report += f"• {error}\n"
+            else:
+                report += f"• И еще {len(errors) - 5} ошибок...\n"
+        
+        try:
+            bot.send_message(message.chat.id, report, parse_mode='Markdown')
+        except:
+            bot.send_message(message.chat.id, report.replace('*', ''))
+            
+    except Exception as e:
+        logger.error(f"Критическая ошибка в activate_pending_payments_command: {e}")
+        bot.send_message(message.chat.id, f"❌ Произошла ошибка: {str(e)}")
+
 # ============== АДМИН КОМАНДЫ ==============
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
@@ -900,7 +1056,8 @@ def admin_panel(message):
         types.InlineKeyboardButton("📊 Статистика", callback_data="admin_stats"),
         types.InlineKeyboardButton("🔍 Проверить платежи", callback_data="admin_check_payments"),
         types.InlineKeyboardButton("👥 Пользователи", callback_data="admin_users"),
-        types.InlineKeyboardButton("🔄 Запустить проверку", callback_data="admin_run_check")
+        types.InlineKeyboardButton("🔄 Запустить проверку", callback_data="admin_run_check"),
+        types.InlineKeyboardButton("✅ Активировать пропущенные", callback_data="admin_activate_all")
     )
     
     bot.send_message(
@@ -1046,9 +1203,11 @@ def admin_callback(call):
                     payment_info = check_payment_with_details(payment_id)
                     
                     if payment_info and payment_info.get('status') == 'succeeded':
-                        add_subscription_to_db(user_id, period_days)
-                        update_payment_status(payment_id, 'succeeded')
-                        activated += 1
+                        if activate_subscription_with_notification(user_id, period_days, payment_id):
+                            update_payment_status(payment_id, 'succeeded')
+                            activated += 1
+                        else:
+                            logger.error(f"Не удалось активировать подписку для payment_id={payment_id}")
                     
                     checked += 1
                 except Exception as e:
@@ -1067,10 +1226,103 @@ def admin_callback(call):
                 bot.send_message(call.message.chat.id, result_text.replace('*', ''))
             
             bot.answer_callback_query(call.id, f"✅ Проверено: {checked}, активировано: {activated}")
+        
+        elif call.data == "admin_activate_all":
+            # Активируем все пропущенные платежи
+            pending_payments = get_all_pending_payments()
+            
+            if not pending_payments:
+                bot.answer_callback_query(call.id, "✅ Нет платежей для активации")
+                try:
+                    bot.edit_message_text(
+                        "✅ Нет платежей со статусом 'pending' для активации.",
+                        call.message.chat.id,
+                        call.message.message_id
+                    )
+                except:
+                    bot.send_message(call.message.chat.id, "✅ Нет платежей со статусом 'pending' для активации.")
+                return
+            
+            # Отправляем сообщение о начале процесса
+            try:
+                bot.edit_message_text(
+                    f"🔄 Проверяю {len(pending_payments)} платежей...\nПожалуйста, подождите.",
+                    call.message.chat.id,
+                    call.message.message_id
+                )
+            except:
+                bot.send_message(call.message.chat.id, f"🔄 Проверяю {len(pending_payments)} платежей...")
+            
+            checked = 0
+            activated = 0
+            errors = []
+            
+            for payment_id, user_id, amount, period_days, created_at in pending_payments:
+                try:
+                    checked += 1
+                    
+                    # Проверяем статус платежа в ЮКассе
+                    try:
+                        from payment import check_payment_with_details
+                        payment_info = check_payment_with_details(payment_id)
+                        
+                        if payment_info and payment_info.get('status') == 'succeeded':
+                            # Активируем подписку с уведомлением
+                            if activate_subscription_with_notification(user_id, period_days, payment_id):
+                                update_payment_status(payment_id, 'succeeded')
+                                activated += 1
+                                logger.info(f"✅ Активирована подписка для payment_id={payment_id}, user_id={user_id}")
+                            else:
+                                errors.append(f"Не удалось активировать {payment_id[:12]}...")
+                        elif payment_info:
+                            logger.info(f"⏳ Платеж {payment_id} еще в статусе: {payment_info.get('status')}")
+                        else:
+                            logger.warning(f"⚠️ Не удалось получить информацию о платеже {payment_id}")
+                            
+                    except ImportError:
+                        logger.warning(f"⚠️ Модуль payment не найден, пропускаю проверку {payment_id}")
+                        errors.append(f"Модуль payment не найден")
+                    except Exception as e:
+                        logger.error(f"Ошибка проверки платежа {payment_id}: {e}")
+                        errors.append(f"Ошибка: {str(e)[:30]}")
+                        
+                except Exception as e:
+                    logger.error(f"Критическая ошибка обработки платежа {payment_id}: {e}")
+                    errors.append(f"Критическая ошибка")
+            
+            # Формируем отчет
+            result_text = (
+                f"🔄 *АКТИВАЦИЯ ЗАВЕРШЕНА*\n\n"
+                f"✅ Проверено: {checked}\n"
+                f"🎉 Активировано: {activated}\n"
+            )
+            
+            if errors:
+                result_text += f"\n⚠️ Ошибок: {len(errors)}"
+                if len(errors) <= 3:
+                    for error in errors[:3]:
+                        result_text += f"\n• {error}"
+            
+            try:
+                bot.edit_message_text(
+                    result_text,
+                    call.message.chat.id,
+                    call.message.message_id,
+                    parse_mode='Markdown'
+                )
+            except:
+                bot.send_message(call.message.chat.id, result_text.replace('*', ''))
+            
+            bot.answer_callback_query(call.id, f"✅ Проверено: {checked}, активировано: {activated}")
     
     except Exception as e:
         logger.error(f"Ошибка в admin_callback: {e}")
-        bot.answer_callback_query(call.id, f"❌ Ошибка: {str(e)[:50]}")
+        import traceback
+        logger.error(traceback.format_exc())
+        try:
+            bot.answer_callback_query(call.id, f"❌ Ошибка: {str(e)[:50]}")
+        except:
+            pass
 
 # ============== ГЛОБАЛЬНЫЙ ОБРАБОТЧИК ОШИБОК ==============
 @bot.message_handler(func=lambda message: True)
