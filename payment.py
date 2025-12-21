@@ -67,38 +67,61 @@ def check_payment_with_details(payment_id):
     Проверяет статус платежа с деталями
     Возвращает словарь с полной информацией
     """
+    # 1. Проверяем, что payment_id не пустой
+    if not payment_id:
+        print(f"DEBUG: Пустой payment_id!")
+        return {
+            'status': 'error',
+            'error': 'Empty payment_id',
+            'payment_id': None
+        }
+    
     try:
+        # 2. Проверяем, что ключи ЮКассы настроены
+        if not Configuration.account_id or not Configuration.secret_key:
+            print(f"DEBUG: Ключи ЮКассы не настроены!")
+            return {
+                'status': 'error', 
+                'error': 'Yookassa keys not configured',
+                'payment_id': payment_id
+            }
+        
+        # 3. Ищем платеж
+        print(f"DEBUG: Ищу платеж {payment_id}...")
         payment = Payment.find_one(payment_id)
         
+        if payment is None:
+            print(f"DEBUG: Платеж {payment_id} не найден в ЮКассе!")
+            return {
+                'status': 'not_found',
+                'error': f'Платеж {payment_id} не найден в ЮКассе',
+                'payment_id': payment_id
+            }
+        
+        # 4. Формируем ответ
         result = {
             'status': payment.status,
             'payment_id': payment.id,
             'paid': getattr(payment, 'paid', False),
-            'cancellation_reason': getattr(payment, 'cancellation_details', {}).get('reason', ''),
-            'created_at': getattr(payment, 'created_at', None),
-            'expires_at': getattr(payment, 'expires_at', None)
+            'created_at': getattr(payment, 'created_at', None)
         }
         
         # Добавляем сумму, если есть
-        if hasattr(payment, 'amount'):
+        if hasattr(payment, 'amount') and payment.amount:
             result['amount'] = payment.amount.value
             result['currency'] = payment.amount.currency
         
-        # Добавляем описание, если есть
-        if hasattr(payment, 'description'):
-            result['description'] = payment.description
-        
         # Добавляем метаданные, если есть
-        if hasattr(payment, 'metadata'):
+        if hasattr(payment, 'metadata') and payment.metadata:
             result['metadata'] = payment.metadata
+        else:
+            result['metadata'] = {}
         
-        # Добавляем способ оплаты, если есть
-        if hasattr(payment, 'payment_method'):
-            result['payment_method'] = payment.payment_method.type
-        
+        print(f"DEBUG: Платеж найден, статус: {result['status']}")
         return result
         
     except Exception as e:
+        print(f"DEBUG: Исключение в check_payment_with_details: {e}")
         return {
             'status': 'error',
             'error': str(e),
