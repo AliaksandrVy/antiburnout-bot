@@ -672,7 +672,8 @@ def create_subscription_payment(message):
         return
     
     # Сохраняем платеж в БД
-    save_payment_to_db(user_id, payment_id, tariff["amount"], tariff["days"])
+    if not save_payment_to_db(user_id, payment_id, tariff["amount"], tariff["days"]):
+        logger.error(f"Не удалось сохранить платеж {payment_id} в БД")
     
     # БЕЗОПАСНАЯ версия сообщения (без Markdown)
     response = (
@@ -691,8 +692,19 @@ def create_subscription_payment(message):
         f"💡 Совет: Скопируйте ссылку и откройте в браузере."
     )
     
-    bot.send_message(message.chat.id, response, reply_markup=back_keyboard)
-    logger.info(f"✅ Отправлена ссылка на оплату пользователю {user_id}")
+    try:
+        bot.send_message(message.chat.id, response, reply_markup=back_keyboard)
+        logger.info(f"✅ Отправлена ссылка на оплату пользователю {user_id}")
+    except Exception as e:
+        logger.error(f"Ошибка отправки сообщения пользователю {user_id}: {e}")
+        try:
+            bot.send_message(
+                message.chat.id,
+                f"💳 Ссылка для оплаты: {payment_url}\n\nID платежа: {payment_id}",
+                reply_markup=back_keyboard
+            )
+        except:
+            logger.error(f"Критическая ошибка отправки сообщения пользователю {user_id}")
 
 @bot.message_handler(func=lambda message: message.text == "🔙 НАЗАД")
 def back_to_subscription_from_tariff(message):
@@ -901,8 +913,214 @@ def admin_panel(message):
 def admin_callback(call):
     """Обработка админ-кнопок"""
     if str(call.from_user.id) != ADMIN_ID:
+        bot.answer_callback_query(call.id, "❌ Доступ запрещен")
         return
     
-    if call.data == "admin_stats":
-        conn = sqlite3.connect('users.db')
-        cursor = conn.cursor()
+    try:
+        if call.data == "admin_stats":
+            conn = sqlite3.connect('users.db')
+            cursor = conn.cursor()
+            
+            # Общая статистика
+            cursor.execute("SELECT COUNT(*) FROM users")
+            total_users = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT COUNT(*) FROM users WHERE subscription_end IS NOT NULL AND subscription_end >= date('now')")
+            active_subscriptions = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT COUNT(*) FROM payments WHERE status = 'succeeded'")
+            successful_payments = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT SUM(amount) FROM payments WHERE status = 'succeeded'")
+            total_revenue = cursor.fetchone()[0] or 0
+            
+            conn.close()
+            
+            stats_text = (
+                f"📊 *СТАТИСТИКА БОТА*\n\n"
+                f"👥 Всего пользователей: {total_users}\n"
+                f"✅ Активных подписок: {active_subscriptions}\n"
+                f"💳 Успешных платежей: {successful_payments}\n"
+                f"💰 Общий доход: {total_revenue:.2f}₽"
+            )
+            
+            try:
+                bot.edit_message_text(
+                    stats_text,
+                    call.message.chat.id,
+                    call.message.message_id,
+                    parse_mode='Markdown'
+                )
+            except:
+                bot.send_message(call.message.chat.id, stats_text.replace('*', ''))
+            
+            bot.answer_callback_query(call.id, "✅ Статистика обновлена")
+        
+        elif call.data == "admin_check_payments":
+            conn = sqlite3.connect('users.db')
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT payment_id, user_id, amount, status, created_at 
+                FROM payments 
+                ORDER BY created_at DESC 
+                LIMIT 10
+            """)
+            payments = cursor.fetchall()
+            conn.close()
+            
+            if payments:
+                payments_text = "🔍 *ПОСЛЕДНИЕ 10 ПЛАТЕЖЕЙ:*\n\n"
+                for payment_id, user_id, amount, status, created_at in payments:
+                    status_emoji = "✅" if status == "succeeded" else "⏳" if status == "pending" else "❌"
+                    payments_text += f"{status_emoji} {payment_id[:12]}... | {amount}₽ | {status}\n"
+                    payments_text += f"   👤 User: {user_id} | 📅 {created_at}\n\n"
+            else:
+                payments_text = "❌ Платежей пока нет"
+            
+            try:
+                bot.edit_message_text(
+                    payments_text,
+                    call.message.chat.id,
+                    call.message.message_id,
+                    parse_mode='Markdown'
+                )
+            except:
+                bot.send_message(call.message.chat.id, payments_text.replace('*', ''))
+            
+            bot.answer_callback_query(call.id, "✅ Список платежей обновлен")
+        
+        elif call.data == "admin_users":
+            conn = sqlite3.connect('users.db')
+            cursor = conn.cursor()
+            
+            cursor.execute("SELECT COUNT(*) FROM users")
+            total_users = cursor.fetchone()[0]
+            
+            cursor.execute("""
+                SELECT user_id, username, first_name, subscription_end 
+                FROM users 
+                ORDER BY created_at DESC 
+                LIMIT 10
+            """)
+            recent_users = cursor.fetchall()
+            conn.close()
+            
+            users_text = f"👥 *ПОЛЬЗОВАТЕЛИ*\n\nВсего: {total_users}\n\n*Последние 10:*\n\n"
+            for user_id, username, first_name, sub_end in recent_users:
+                sub_status = "✅" if sub_end and datetime.strptime(sub_end.split()[0], '%Y-%m-%d').date() >= datetime.now().date() else "❌"
+                users_text += f"{sub_status} {first_name} (@{username or 'нет'})\n"
+                users_text += f"   ID: {user_id}\n\n"
+            
+            try:
+                bot.edit_message_text(
+                    users_text,
+                    call.message.chat.id,
+                    call.message.message_id,
+                    parse_mode='Markdown'
+                )
+            except:
+                bot.send_message(call.message.chat.id, users_text.replace('*', ''))
+            
+            bot.answer_callback_query(call.id, "✅ Список пользователей обновлен")
+        
+        elif call.data == "admin_run_check":
+            # Запускаем проверку всех pending платежей
+            conn = sqlite3.connect('users.db')
+            cursor = conn.cursor()
+            
+            cursor.execute("SELECT payment_id, user_id, period_days FROM payments WHERE status = 'pending'")
+            pending_payments = cursor.fetchall()
+            conn.close()
+            
+            if not pending_payments:
+                bot.answer_callback_query(call.id, "✅ Нет платежей для проверки")
+                return
+            
+            checked = 0
+            activated = 0
+            
+            for payment_id, user_id, period_days in pending_payments:
+                try:
+                    from payment import check_payment_with_details
+                    payment_info = check_payment_with_details(payment_id)
+                    
+                    if payment_info and payment_info.get('status') == 'succeeded':
+                        add_subscription_to_db(user_id, period_days)
+                        update_payment_status(payment_id, 'succeeded')
+                        activated += 1
+                    
+                    checked += 1
+                except Exception as e:
+                    logger.error(f"Ошибка проверки платежа {payment_id}: {e}")
+            
+            result_text = f"🔄 *ПРОВЕРКА ЗАВЕРШЕНА*\n\nПроверено: {checked}\nАктивировано: {activated}"
+            
+            try:
+                bot.edit_message_text(
+                    result_text,
+                    call.message.chat.id,
+                    call.message.message_id,
+                    parse_mode='Markdown'
+                )
+            except:
+                bot.send_message(call.message.chat.id, result_text.replace('*', ''))
+            
+            bot.answer_callback_query(call.id, f"✅ Проверено: {checked}, активировано: {activated}")
+    
+    except Exception as e:
+        logger.error(f"Ошибка в admin_callback: {e}")
+        bot.answer_callback_query(call.id, f"❌ Ошибка: {str(e)[:50]}")
+
+# ============== ГЛОБАЛЬНЫЙ ОБРАБОТЧИК ОШИБОК ==============
+@bot.message_handler(func=lambda message: True)
+def handle_all_messages(message):
+    """Обработчик для всех необработанных сообщений"""
+    try:
+        # Игнорируем команды и кнопки, которые уже обработаны
+        if message.text and message.text.startswith('/'):
+            return
+        
+        # Для неизвестных сообщений отправляем подсказку
+        bot.send_message(
+            message.chat.id,
+            "🤔 Я не понял ваше сообщение.\n\n"
+            "Используйте кнопки меню или команды:\n"
+            "/start - Главное меню\n"
+            "/help - Справка",
+            reply_markup=main_menu_keyboard
+        )
+    except Exception as e:
+        logger.error(f"Ошибка в handle_all_messages: {e}")
+
+# Обработчик ошибок для callback-запросов
+@bot.callback_query_handler(func=lambda call: True)
+def handle_all_callbacks(call):
+    """Обработчик для всех необработанных callback-запросов"""
+    try:
+        bot.answer_callback_query(call.id, "❌ Неизвестная команда")
+    except Exception as e:
+        logger.error(f"Ошибка в handle_all_callbacks: {e}")
+
+# ============== ЗАПУСК БОТА ==============
+if __name__ == '__main__':
+    try:
+        logger.info("🚀 Запуск бота...")
+        logger.info(f"✅ Бот готов к работе. ID админа: {ADMIN_ID}")
+        
+        # Запускаем бота с обработкой ошибок
+        bot.infinity_polling(
+            timeout=10,
+            long_polling_timeout=5,
+            logger_level=logging.INFO,
+            none_stop=True,  # Продолжать работу при ошибках
+            interval=0  # Минимальная задержка между запросами
+        )
+        
+    except KeyboardInterrupt:
+        logger.info("⏹️ Бот остановлен пользователем")
+    except Exception as e:
+        logger.error(f"❌ Критическая ошибка: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise
