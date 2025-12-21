@@ -197,6 +197,39 @@ def add_subscription_to_db(user_id, days):
     finally:
         conn.close()
 
+def get_last_payment(user_id):
+    """Получение последнего платежа пользователя"""
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT payment_id, status, period_days FROM payments WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
+            (user_id,)
+        )
+        return cursor.fetchone()
+    except Exception as e:
+        logger.error(f"Ошибка получения платежа: {e}")
+        return None
+    finally:
+        conn.close()
+
+def update_payment_status(payment_id, status):
+    """Обновление статуса платежа"""
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "UPDATE payments SET status = ? WHERE payment_id = ?",
+            (status, payment_id)
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка обновления платежа: {e}")
+        return False
+    finally:
+        conn.close()
+
 # ============== ЗАГРУЗКА ТЕХНИК ==============
 try:
     with open('techniques.json', 'r', encoding='utf-8') as f:
@@ -211,6 +244,20 @@ except:
                 "description": "Вдох на 4 счета, задержка на 7, выдох на 8.",
                 "time": "5 минут",
                 "tip": "Делайте утром для спокойного дня."
+            },
+            {
+                "name": "Диафрагмальное дыхание",
+                "description": "Дышите животом, медленно и глубоко.",
+                "time": "3-5 минут",
+                "tip": "Положите руку на живот для контроля."
+            }
+        ],
+        "Медитации": [
+            {
+                "name": "Медитация осознанности",
+                "description": "Сосредоточьтесь на дыхании, наблюдайте мысли без оценки.",
+                "time": "10 минут",
+                "tip": "Начинайте с 3-5 минут и увеличивайте постепенно."
             }
         ]
     }
@@ -260,14 +307,53 @@ def send_welcome(message):
     bot.send_message(message.chat.id, welcome_text, reply_markup=main_menu_keyboard)
     logger.info(f"👤 Новый пользователь: {user_id} ({username})")
 
+@bot.message_handler(commands=['help'])
+def send_help(message):
+    """Помощь"""
+    help_text = (
+        "🤖 *Анти-Выгорание Бот*\n\n"
+        "📋 *Доступные команды:*\n\n"
+        "• /start - Начать работу\n"
+        "• /help - Эта справка\n"
+        "• /profile - Ваш профиль\n"
+        "• /check_sub - Проверить подписку\n"
+        "• /check_payment - Проверить платеж\n"
+        "• /test_payment - Тестовая активация подписки\n\n"
+        "📱 *Основные функции:*\n"
+        "• 🌟 Техника на каждый день (требуется подписка)\n"
+        "• 💰 Подписка на доступ ко всем техникам\n"
+        "• 👤 Профиль со статистикой\n\n"
+        "💎 *Подписка открывает доступ к полной библиотеке техник!*"
+    )
+    
+    try:
+        bot.send_message(message.chat.id, help_text, parse_mode='Markdown')
+    except:
+        # Если Markdown не работает
+        help_text_simple = (
+            "🤖 Анти-Выгорание Бот\n\n"
+            "Доступные команды:\n"
+            "/start - Начать работу\n"
+            "/help - Эта справка\n"
+            "/profile - Ваш профиль\n"
+            "/check_sub - Проверить подписку\n"
+            "/check_payment - Проверить платеж\n"
+            "/test_payment - Тестовая активация\n\n"
+            "Основные функции:\n"
+            "• Техника на каждый день (требуется подписка)\n"
+            "• Подписка на доступ ко всем техникам\n"
+            "• Профиль со статистикой\n\n"
+            "Подписка открывает доступ к полной библиотеке техник!"
+        )
+        bot.send_message(message.chat.id, help_text_simple)
+
 @bot.message_handler(func=lambda message: message.text == "🌟 ТЕХНИКА НА СЕГОДНЯ")
 def daily_technique(message):
     """Техника на сегодня"""
     user_id = message.from_user.id
     
     if not check_subscription_in_db(user_id):
-        bot.send_message(
-            message.chat.id,
+        response = (
             "🔒 *Эта функция доступна только по подписке!*\n\n"
             "✨ *Преимущества подписки:*\n"
             "• Персональная техника на каждый день\n"
@@ -277,10 +363,20 @@ def daily_technique(message):
             "• 1 месяц - 99₽\n"
             "• 3 месяца - 269₽\n"
             "• 12 месяцев - 799₽\n\n"
-            "Нажмите '💰 ПОДПИСКА' для оформления.",
-            reply_markup=main_menu_keyboard,
-            parse_mode='Markdown'
+            "Нажмите '💰 ПОДПИСКА' для оформления."
         )
+        
+        try:
+            bot.send_message(message.chat.id, response, reply_markup=main_menu_keyboard, parse_mode='Markdown')
+        except:
+            bot.send_message(message.chat.id, 
+                           "🔒 Эта функция доступна только по подписке!\n\n"
+                           "Преимущества подписки:\n"
+                           "• Персональная техника на каждый день\n"
+                           "• Доступ к полной библиотеке\n\n"
+                           "Тарифы: 1 месяц - 99₽, 3 месяца - 269₽, 12 месяцев - 799₽\n\n"
+                           "Нажмите '💰 ПОДПИСКА' для оформления.",
+                           reply_markup=main_menu_keyboard)
         return
     
     # Если подписка есть
@@ -293,13 +389,18 @@ def daily_technique(message):
             f"📁 *Категория:* {category}\n"
             f"🎯 *Название:* {technique['name']}\n\n"
             f"📝 *Описание:*\n{technique['description']}\n\n"
-            f"⏱ *Время выполнения:* {technique.get('time', '5-10 минут')}\n\n"
-            f"💡 *Совет:* {technique.get('tip', 'Выполняйте технику осознанно.')}"
+            f"⏱ *Время:* {technique.get('time', '5-10 минут')}\n\n"
+            f"💡 *Совет:* {technique.get('tip', 'Выполняйте осознанно.')}"
         )
     else:
         response = "📚 Техники временно недоступны. Мы работаем над этим!"
     
-    bot.send_message(message.chat.id, response, reply_markup=back_keyboard, parse_mode='Markdown')
+    try:
+        bot.send_message(message.chat.id, response, reply_markup=back_keyboard, parse_mode='Markdown')
+    except:
+        bot.send_message(message.chat.id, 
+                        f"ТЕХНИКА НА СЕГОДНЯ\n\nКатегория: {category}\nНазвание: {technique['name']}\n\nОписание:\n{technique['description']}\n\nВремя: {technique.get('time', '5-10 минут')}\n\nСовет: {technique.get('tip', 'Выполняйте осознанно.')}",
+                        reply_markup=back_keyboard)
 
 @bot.message_handler(func=lambda message: message.text == "💰 ПОДПИСКА")
 def subscription_menu(message):
@@ -314,33 +415,67 @@ def subscription_menu(message):
         
         if subscription_end:
             response = (
-                f"💰 *ВАША ПОДПИСКА*\n\n"
+                "💰 *ВАША ПОДПИСКА*\n\n"
                 f"✅ *Статус:* АКТИВНА\n"
                 f"📅 *Дней осталось:* {days_left}\n"
                 f"🏁 *Действует до:* {subscription_end.strftime('%d.%m.%Y')}\n\n"
-                f"✨ *Доступно:*\n"
-                f"• 🌟 Техника на каждый день\n"
-                f"• 📚 Полная библиотека\n"
-                f"• 📊 Статистика и прогресс"
+                "✨ *Доступно:*\n"
+                "• 🌟 Техника на каждый день\n"
+                "• 📚 Полная библиотека\n"
+                "• 📊 Статистика и прогресс"
             )
         else:
             response = "✅ Ваша подписка активна!"
     else:
         response = (
-            f"💰 *ПОДПИСКА*\n\n"
-            f"❌ *Статус:* НЕ АКТИВНА\n\n"
-            f"✨ *Преимущества подписки:*\n"
-            f"• 🌟 Персональная техника на каждый день\n"
-            f"• 📚 Доступ ко всем техникам\n"
-            f"• 📊 Отслеживание прогресса\n\n"
-            f"💎 *Стоимость:*\n"
-            f"• 1 месяц - 99₽\n"
-            f"• 3 месяца - 269₽\n"
-            f"• 12 месяцев - 799₽\n\n"
-            f"Нажмите '💰 КУПИТЬ ПОДПИСКУ' для оформления."
+            "💰 *ПОДПИСКА*\n\n"
+            "❌ *Статус:* НЕ АКТИВНА\n\n"
+            "✨ *Преимущества подписки:*\n"
+            "• 🌟 Персональная техника на каждый день\n"
+            "• 📚 Доступ ко всем техникам\n"
+            "• 📊 Отслеживание прогресса\n\n"
+            "💎 *Стоимость:*\n"
+            "• 1 месяц - 99₽\n"
+            "• 3 месяца - 269₽\n"
+            "• 12 месяцев - 799₽\n\n"
+            "Нажмите '💰 КУПИТЬ ПОДПИСКУ' для оформления."
         )
     
-    bot.send_message(message.chat.id, response, reply_markup=subscription_keyboard, parse_mode='Markdown')
+    try:
+        bot.send_message(message.chat.id, response, reply_markup=subscription_keyboard, parse_mode='Markdown')
+    except:
+        # Упрощенная версия без Markdown
+        if has_subscription:
+            subscription_end, days_left = get_subscription_info(user_id)
+            if subscription_end:
+                simple_response = (
+                    f"💰 ВАША ПОДПИСКА\n\n"
+                    f"✅ Статус: АКТИВНА\n"
+                    f"📅 Дней осталось: {days_left}\n"
+                    f"🏁 Действует до: {subscription_end.strftime('%d.%m.%Y')}\n\n"
+                    f"Доступно:\n"
+                    f"• Техника на каждый день\n"
+                    f"• Полная библиотека\n"
+                    f"• Статистика и прогресс"
+                )
+            else:
+                simple_response = "✅ Ваша подписка активна!"
+        else:
+            simple_response = (
+                "💰 ПОДПИСКА\n\n"
+                "❌ Статус: НЕ АКТИВНА\n\n"
+                "Преимущества подписки:\n"
+                "• Персональная техника на каждый день\n"
+                "• Доступ ко всем техникам\n"
+                "• Отслеживание прогресса\n\n"
+                "Стоимость:\n"
+                "• 1 месяц - 99₽\n"
+                "• 3 месяца - 269₽\n"
+                "• 12 месяцев - 799₽\n\n"
+                "Нажмите '💰 КУПИТЬ ПОДПИСКУ' для оформления."
+            )
+        
+        bot.send_message(message.chat.id, simple_response, reply_markup=subscription_keyboard)
 
 @bot.message_handler(func=lambda message: message.text == "💰 КУПИТЬ ПОДПИСКУ")
 def buy_subscription(message):
@@ -371,7 +506,23 @@ def buy_subscription(message):
         "Выберите вариант:"
     )
     
-    bot.send_message(message.chat.id, response, reply_markup=tariff_keyboard, parse_mode='Markdown')
+    try:
+        bot.send_message(message.chat.id, response, reply_markup=tariff_keyboard, parse_mode='Markdown')
+    except:
+        bot.send_message(message.chat.id,
+                        "💰 ВЫБЕРИТЕ ТАРИФ ПОДПИСКИ:\n\n"
+                        "📅 1 МЕСЯЦ - 99₽\n"
+                        "• Ежедневные техники\n"
+                        "• Полный доступ\n\n"
+                        "📅 3 МЕСЯЦА - 269₽\n"
+                        "• Экономия 28₽\n"
+                        "• Все преимущества\n\n"
+                        "📅 12 МЕСЯЦЕВ - 799₽\n"
+                        "• Экономия 389₽\n"
+                        "• Максимальная выгода\n\n"
+                        "Выберите вариант:",
+                        reply_markup=tariff_keyboard)
+    
     logger.info(f"👤 Пользователь {user_id} выбирает тариф")
 
 @bot.message_handler(func=lambda message: message.text in ["📅 1 МЕСЯЦ - 99₽", "📅 3 МЕСЯЦА - 269₽", "📅 12 МЕСЯЦЕВ - 799₽"])
@@ -420,29 +571,26 @@ def create_subscription_payment(message):
         return
     
     # Сохраняем платеж в БД
-    if save_payment_to_db(user_id, payment_id, tariff["amount"], tariff["days"]):
-        logger.info(f"✅ Платеж сохранен в БД")
-    else:
-        logger.error(f"❌ Не удалось сохранить платеж в БД")
+    save_payment_to_db(user_id, payment_id, tariff["amount"], tariff["days"])
     
-    # Отправляем пользователю ссылку для оплаты
+    # БЕЗОПАСНАЯ версия сообщения (без Markdown)
     response = (
-        f"💳 *ОПЛАТА ПОДПИСКИ*\n\n"
-        f"📋 *Тариф:* {message.text}\n"
-        f"💰 *Сумма:* {tariff['amount']:.0f}₽\n"
-        f"📅 *Срок:* {tariff['days']} дней\n\n"
-        f"👉 *Для оплаты перейдите по ссылке:*\n\n"
+        "💳 ОПЛАТА ПОДПИСКИ\n\n"
+        f"📋 Тариф: {message.text}\n"
+        f"💰 Сумма: {tariff['amount']:.0f}₽\n"
+        f"📅 Срок: {tariff['days']} дней\n\n"
+        f"👉 Ссылка для оплаты:\n"
         f"{payment_url}\n\n"
-        f"✅ *После успешной оплаты:*\n"
+        f"✅ После успешной оплаты:\n"
         f"• Подписка активируется автоматически\n"
         f"• Вы получите уведомление\n"
         f"• Сразу откроется доступ к техникам\n\n"
-        f"🔍 *Проверить статус оплаты:* /check_payment\n\n"
-        f"📋 *ID платежа:* `{payment_id}`\n\n"
-        f"💡 *Совет:* Скопируйте ссылку и откройте в браузере."
+        f"🔍 Проверить статус: /check_payment\n\n"
+        f"📋 ID платежа: {payment_id}\n\n"
+        f"💡 Совет: Скопируйте ссылку и откройте в браузере."
     )
     
-    bot.send_message(message.chat.id, response, reply_markup=back_keyboard, parse_mode='Markdown')
+    bot.send_message(message.chat.id, response, reply_markup=back_keyboard)
     logger.info(f"✅ Отправлена ссылка на оплату пользователю {user_id}")
 
 @bot.message_handler(func=lambda message: message.text == "🔙 НАЗАД")
@@ -473,121 +621,105 @@ def user_profile(message):
         subscription_info_text = ""
     
     response = (
-        f"👤 *ВАШ ПРОФИЛЬ*\n\n"
+        f"👤 ВАШ ПРОФИЛЬ\n\n"
         f"🆔 ID: {user_id}\n"
         f"👤 Имя: {message.from_user.first_name}\n"
         f"📊 Подписка: {subscription_status}{subscription_info_text}\n\n"
-        f"✨ *Для доступа к полному функционалу оформите подписку!*"
+        f"✨ Для доступа к полному функционалу оформите подписку!"
     )
     
-    bot.send_message(message.chat.id, response, reply_markup=back_keyboard, parse_mode='Markdown')
+    bot.send_message(message.chat.id, response, reply_markup=back_keyboard)
 
 @bot.message_handler(func=lambda message: message.text == "ℹ️ О ПРОЕКТЕ")
 def about_project(message):
     """Информация о проекте"""
     response = (
-        "ℹ️ *О ПРОЕКТЕ*\n\n"
-        "🤖 *Анти-выгорание Бот*\n\n"
+        "ℹ️ О ПРОЕКТЕ\n\n"
+        "🤖 Анти-выгорание Бот\n\n"
         "Миссия: Помогать людям справляться с эмоциональным выгоранием и стрессом через простые и эффективные техники.\n\n"
-        "📞 *Контакты:*\n"
+        "📞 Контакты:\n"
         "По вопросам и предложениям: @avllks\n\n"
-        "💖 *Помни:* Забота о себе - это не роскошь, а необходимость!"
+        "💖 Помни: Забота о себе - это не роскошь, а необходимость!"
     )
     
-    bot.send_message(message.chat.id, response, reply_markup=back_keyboard, parse_mode='Markdown')
+    bot.send_message(message.chat.id, response, reply_markup=back_keyboard)
 
 @bot.message_handler(func=lambda message: message.text == "📊 ИНФОРМАЦИЯ О ПОДПИСКЕ")
 def subscription_info(message):
     """Информация о подписке"""
     response = (
-        "📊 *ИНФОРМАЦИЯ О ПОДПИСКЕ*\n\n"
-        "💎 *Тарифы:*\n"
+        "📊 ИНФОРМАЦИЯ О ПОДПИСКЕ\n\n"
+        "💎 Тарифы:\n"
         "• 1 месяц: 99₽\n"
         "• 3 месяца: 269₽ (экономия 28₽)\n"
         "• 12 месяцев: 799₽ (экономия 389₽)\n\n"
-        "✨ *Что входит:*\n"
+        "✨ Что входит:\n"
         "✅ Персональные техники на каждый день\n"
         "✅ Полный доступ к библиотеке\n"
         "✅ Статистика и прогресс\n"
         "✅ Поддержка и советы\n\n"
         "🔄 Автопродление можно отключить в любой момент."
     )
-    bot.send_message(message.chat.id, response, reply_markup=subscription_keyboard, parse_mode='Markdown')
+    bot.send_message(message.chat.id, response, reply_markup=subscription_keyboard)
 
 @bot.message_handler(commands=['check_payment'])
 def check_payment_command(message):
     """Проверка статуса платежа"""
     user_id = message.from_user.id
     
-    conn = sqlite3.connect('users.db')
-    cursor = conn.cursor()
+    payment_info = get_last_payment(user_id)
     
-    # Получаем последний платеж
-    cursor.execute(
-        "SELECT payment_id, status, period_days FROM payments WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
-        (user_id,)
-    )
-    result = cursor.fetchone()
-    
-    if not result:
+    if not payment_info:
         bot.send_message(message.chat.id, "❌ У вас нет платежей.")
-        conn.close()
         return
     
-    payment_id, status, period_days = result
+    payment_id, status, period_days = payment_info
     
     if status == 'succeeded':
         # Проверяем, активирована ли подписка
         if check_subscription_in_db(user_id):
             response = (
-                f"✅ *ПЛАТЕЖ УСПЕШЕН!*\n\n"
-                f"📋 ID: `{payment_id[:12]}...`\n"
-                f"🎉 *Подписка активна!*\n\n"
+                f"✅ ПЛАТЕЖ УСПЕШЕН!\n\n"
+                f"📋 ID: {payment_id[:12]}...\n"
+                f"🎉 Подписка активна!\n\n"
                 f"Теперь вам доступны все функции бота!\n"
                 f"Нажмите «🌟 ТЕХНИКА НА СЕГОДНЯ»"
             )
         else:
             # Если платеж успешен, но подписка не активирована
             add_subscription_to_db(user_id, period_days)
-            response = "🎉 *Платеж подтвержден! Подписка активирована!*"
+            response = "🎉 Платеж подтвержден! Подписка активирована!"
     
     elif status == 'pending':
-        # В демо-режиме активируем подписку сразу
         try:
             from payment import check_payment_with_details
-            payment_info = check_payment_with_details(payment_id)
             
-            if payment_info and payment_info.get('status') == 'succeeded':
+            payment_info_check = check_payment_with_details(payment_id)
+            
+            if payment_info_check and payment_info_check.get('status') == 'succeeded':
                 add_subscription_to_db(user_id, period_days)
-                cursor.execute(
-                    "UPDATE payments SET status = 'succeeded' WHERE payment_id = ?",
-                    (payment_id,)
-                )
-                conn.commit()
-                response = "🎉 *Платеж подтвержден! Подписка активирована!*"
+                update_payment_status(payment_id, 'succeeded')
+                response = "🎉 Платеж подтвержден! Подписка активирована!"
             else:
                 response = (
-                    f"⏳ *ПЛАТЕЖ В ОБРАБОТКЕ*\n\n"
-                    f"📋 ID: `{payment_id[:12]}...`\n\n"
+                    f"⏳ ПЛАТЕЖ В ОБРАБОТКЕ\n\n"
+                    f"📋 ID: {payment_id[:12]}...\n\n"
                     f"Пожалуйста, подождите несколько минут.\n"
                     f"Обычно обработка занимает 1-2 минуты.\n\n"
                     f"Если прошло более 10 минут, напишите в поддержку: @avllks"
                 )
         except:
-            # В демо-режиме сразу активируем
-            add_subscription_to_db(user_id, period_days)
-            cursor.execute(
-                "UPDATE payments SET status = 'succeeded' WHERE payment_id = ?",
-                (payment_id,)
+            # В демо-режиме или при ошибке проверки
+            response = (
+                f"⏳ Платеж в обработке\n\n"
+                f"ID: {payment_id[:12]}...\n\n"
+                f"Если вы уже оплатили, нажмите /check_payment еще раз для проверки."
             )
-            conn.commit()
-            response = "🎉 *В демо-режиме: Подписка активирована!*"
     
     else:
         response = f"❌ Платеж не прошел. Статус: {status}"
     
-    conn.close()
-    bot.send_message(message.chat.id, response, parse_mode='Markdown')
+    bot.send_message(message.chat.id, response)
 
 @bot.message_handler(commands=['check_sub'])
 def check_subscription_command(message):
@@ -598,7 +730,7 @@ def check_subscription_command(message):
         subscription_end, days_left = get_subscription_info(user_id)
         if subscription_end:
             response = (
-                f"✅ *Ваша подписка активна!*\n\n"
+                f"✅ Ваша подписка активна!\n\n"
                 f"📅 Дней осталось: {days_left}\n"
                 f"🏁 Действует до: {subscription_end.strftime('%d.%m.%Y')}"
             )
@@ -606,12 +738,12 @@ def check_subscription_command(message):
             response = "✅ Ваша подписка активна!"
     else:
         response = (
-            "❌ *Подписка не активна*\n\n"
+            "❌ Подписка не активна\n\n"
             "Оформите подписку для доступа к полному функционалу бота.\n"
             "Нажмите '💰 ПОДПИСКА' для оформления."
         )
     
-    bot.send_message(message.chat.id, response, parse_mode='Markdown')
+    bot.send_message(message.chat.id, response)
 
 @bot.message_handler(commands=['test_payment'])
 def test_payment(message):
@@ -627,35 +759,49 @@ def test_payment(message):
     save_payment_to_db(user_id, payment_id, 99.00, 30)
     
     # Обновляем статус платежа
-    conn = sqlite3.connect('users.db')
-    cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE payments SET status = 'succeeded' WHERE payment_id = ?",
-        (payment_id,)
-    )
-    conn.commit()
-    conn.close()
+    update_payment_status(payment_id, 'succeeded')
     
     response = (
-        "🎉 *ТЕСТОВАЯ ПОДПИСКА АКТИВИРОВАНА!*\n\n"
+        "🎉 ТЕСТОВАЯ ПОДПИСКА АКТИВИРОВАНА!\n\n"
         "✅ Подписка активирована на 30 дней\n"
         "🌟 Теперь доступны все функции бота\n\n"
         "Нажмите «🌟 ТЕХНИКА НА СЕГОДНЯ» чтобы начать!"
     )
     
-    bot.send_message(message.chat.id, response, parse_mode='Markdown')
+    bot.send_message(message.chat.id, response)
 
-# ============== ЗАПУСК БОТА ==============
-if __name__ == "__main__":
-    logger.info("🤖 Запускаю бота...")
-    print("=" * 50)
-    print("🤖 Анти-Выгорание Бот")
-    print(f"🔑 Токен: {'✅' if TOKEN else '❌'}")
-    print(f"👨‍💼 Админ ID: {ADMIN_ID}")
-    print("=" * 50)
+@bot.message_handler(commands=['profile'])
+def profile_command(message):
+    """Команда профиля"""
+    user_profile(message)
+
+# ============== АДМИН КОМАНДЫ ==============
+@bot.message_handler(commands=['admin'])
+def admin_panel(message):
+    """Панель администратора"""
+    if str(message.from_user.id) != ADMIN_ID:
+        return
     
-    try:
-        bot.polling(none_stop=True, interval=1, timeout=30)
-    except Exception as e:
-        logger.error(f"❌ Ошибка запуска бота: {e}")
-        print(f"❌ Критическая ошибка: {e}")
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        types.InlineKeyboardButton("📊 Статистика", callback_data="admin_stats"),
+        types.InlineKeyboardButton("🔍 Проверить платежи", callback_data="admin_check_payments"),
+        types.InlineKeyboardButton("👥 Пользователи", callback_data="admin_users"),
+        types.InlineKeyboardButton("🔄 Запустить проверку", callback_data="admin_run_check")
+    )
+    
+    bot.send_message(
+        message.chat.id,
+        "👨‍💼 Панель администратора\n\nВыберите действие:",
+        reply_markup=keyboard
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('admin_'))
+def admin_callback(call):
+    """Обработка админ-кнопок"""
+    if str(call.from_user.id) != ADMIN_ID:
+        return
+    
+    if call.data == "admin_stats":
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
