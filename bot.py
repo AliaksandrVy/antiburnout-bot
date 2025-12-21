@@ -183,16 +183,53 @@ def add_subscription_to_db(user_id, days):
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
     try:
-        new_end = (datetime.now() + timedelta(days=days)).date().isoformat()
+        # Проверяем, существует ли пользователь
+        cursor.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
+        user_exists = cursor.fetchone()
+        
+        if not user_exists:
+            # Если пользователя нет, создаем его
+            logger.warning(f"Пользователь {user_id} не найден в БД, создаю запись")
+            cursor.execute(
+                "INSERT INTO users (user_id, username, first_name) VALUES (?, ?, ?)",
+                (user_id, f"user_{user_id}", f"User {user_id}")
+            )
+        
+        # Вычисляем дату окончания подписки
+        new_end = (datetime.now() + timedelta(days=days)).date()
+        new_end_str = new_end.isoformat()
+        
+        # Обновляем подписку
         cursor.execute(
             "UPDATE users SET subscription_end = ? WHERE user_id = ?",
-            (new_end, user_id)
+            (new_end_str, user_id)
         )
+        
+        # Проверяем, что обновление прошло успешно
+        rows_affected = cursor.rowcount
+        if rows_affected == 0:
+            logger.error(f"Не удалось обновить подписку для user_id={user_id}")
+            conn.rollback()
+            return False
+        
         conn.commit()
-        logger.info(f"✅ Подписка добавлена для user_id={user_id} на {days} дней")
-        return True
+        
+        # Проверяем, что подписка действительно сохранена
+        cursor.execute("SELECT subscription_end FROM users WHERE user_id = ?", (user_id,))
+        saved_subscription = cursor.fetchone()
+        
+        if saved_subscription and saved_subscription[0]:
+            logger.info(f"✅ Подписка добавлена для user_id={user_id} на {days} дней до {new_end_str}")
+            return True
+        else:
+            logger.error(f"Подписка не была сохранена для user_id={user_id}")
+            return False
+            
     except Exception as e:
         logger.error(f"Ошибка добавления подписки: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        conn.rollback()
         return False
     finally:
         conn.close()
@@ -340,15 +377,36 @@ def activate_subscription_with_notification(user_id, period_days, payment_id=Non
     """Активация подписки с уведомлением пользователя"""
     try:
         # Активируем подписку
-        if add_subscription_to_db(user_id, period_days):
-            # Отправляем уведомление пользователю
-            subscription_end, days_left = get_subscription_info(user_id)
-            
-            notification_text = (
-                "🎉 *ПОДПИСКА АКТИВИРОВАНА!*\n\n"
-                f"✅ Ваша подписка успешно активирована!\n"
-                f"📅 Дней доступа: {days_left}\n"
-            )
+        if not add_subscription_to_db(user_id, period_days):
+            logger.error(f"Не удалось активировать подписку для user_id={user_id}")
+            return False
+        
+        # Небольшая задержка для гарантии записи в БД
+        import time
+        time.sleep(0.1)
+        
+        # Проверяем, что подписка действительно активирована
+        if not check_subscription_in_db(user_id):
+            logger.error(f"Подписка не прошла проверку после активации для user_id={user_id}")
+            # Пытаемся еще раз
+            if not add_subscription_to_db(user_id, period_days):
+                return False
+        
+        # Отправляем уведомление пользователю
+        subscription_end, days_left = get_subscription_info(user_id)
+        
+        # Если days_left = 0, но подписка активна, пересчитываем
+        if days_left == 0 and subscription_end:
+            today = datetime.now().date()
+            days_left = (subscription_end - today).days
+            if days_left < 0:
+                days_left = 0
+        
+        notification_text = (
+            "🎉 *ПОДПИСКА АКТИВИРОВАНА!*\n\n"
+            f"✅ Ваша подписка успешно активирована!\n"
+            f"📅 Дней доступа: {days_left}\n"
+        )
             
             if subscription_end:
                 notification_text += f"🏁 Действует до: {subscription_end.strftime('%d.%m.%Y')}\n\n"
@@ -511,6 +569,7 @@ def send_help(message):
             "• /activate_payments - Активировать pending платежи\n"
             "• /activate_by_id <payment_id> - Активировать по ID\n"
             "• /activate_many <id1> <id2> ... - Массовая активация\n"
+            "• /fix_subscription <user_id> <days> - Исправить подписку\n"
             "• /test_payment - Тестовая активация подписки\n"
         )
     else:
@@ -1070,6 +1129,87 @@ def test_payment(message):
 def profile_command(message):
     """Команда профиля"""
     user_profile(message)
+
+@bot.message_handler(commands=['fix_subscription'])
+def fix_subscription_command(message):
+    """Исправление подписки (только для админа)
+    
+    Использование: /fix_subscription <user_id> <days>
+    Пример: /fix_subscription 360171560 30
+    """
+    if str(message.from_user.id) != ADMIN_ID:
+        bot.send_message(message.chat.id, "❌ Доступ запрещен. Эта команда только для администратора.")
+        return
+    
+    try:
+        parts = message.text.split()
+        if len(parts) < 3:
+            bot.send_message(
+                message.chat.id,
+                "❌ Неверный формат команды.\n\n"
+                "Использование: /fix_subscription <user_id> <days>\n\n"
+                "Пример:\n"
+                "/fix_subscription 360171560 30"
+            )
+            return
+        
+        user_id = int(parts[1])
+        days = int(parts[2])
+        
+        bot.send_message(
+            message.chat.id,
+            f"🔄 Исправляю подписку для user_id={user_id} на {days} дней..."
+        )
+        
+        # Проверяем текущее состояние
+        current_status = check_subscription_in_db(user_id)
+        subscription_end, days_left = get_subscription_info(user_id)
+        
+        # Активируем подписку
+        if activate_subscription_with_notification(user_id, days):
+            # Проверяем результат
+            new_status = check_subscription_in_db(user_id)
+            new_subscription_end, new_days_left = get_subscription_info(user_id)
+            
+            response = (
+                f"✅ *ПОДПИСКА ИСПРАВЛЕНА*\n\n"
+                f"👤 User ID: {user_id}\n"
+                f"📅 Период: {days} дней\n\n"
+                f"*До исправления:*\n"
+                f"Статус: {'✅ Активна' if current_status else '❌ Не активна'}\n"
+            )
+            
+            if subscription_end:
+                response += f"Действует до: {subscription_end.strftime('%d.%m.%Y')}\n"
+                response += f"Дней осталось: {days_left}\n"
+            
+            response += (
+                f"\n*После исправления:*\n"
+                f"Статус: {'✅ Активна' if new_status else '❌ Не активна'}\n"
+            )
+            
+            if new_subscription_end:
+                response += f"Действует до: {new_subscription_end.strftime('%d.%m.%Y')}\n"
+                response += f"Дней осталось: {new_days_left}\n"
+            
+            if not new_status:
+                response += "\n⚠️ ВНИМАНИЕ: Подписка все еще не активна! Возможна проблема с БД."
+            
+            try:
+                bot.send_message(message.chat.id, response, parse_mode='Markdown')
+            except:
+                bot.send_message(message.chat.id, response.replace('*', ''))
+        else:
+            bot.send_message(
+                message.chat.id,
+                f"❌ Не удалось исправить подписку для user_id={user_id}"
+            )
+            
+    except ValueError:
+        bot.send_message(message.chat.id, "❌ Ошибка формата. user_id и days должны быть числами.")
+    except Exception as e:
+        logger.error(f"Ошибка в fix_subscription_command: {e}")
+        bot.send_message(message.chat.id, f"❌ Произошла ошибка: {str(e)}")
 
 @bot.message_handler(commands=['all_payments'])
 def show_all_payments_command(message):
