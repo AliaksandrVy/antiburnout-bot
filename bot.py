@@ -407,37 +407,37 @@ def activate_subscription_with_notification(user_id, period_days, payment_id=Non
             f"✅ Ваша подписка успешно активирована!\n"
             f"📅 Дней доступа: {days_left}\n"
         )
-            
+        
+        if subscription_end:
+            notification_text += f"🏁 Действует до: {subscription_end.strftime('%d.%m.%Y')}\n\n"
+        
+        notification_text += (
+            "✨ Теперь вам доступны:\n"
+            "• 🌟 Техника на каждый день\n"
+            "• 📚 Полная библиотека техник\n"
+            "• 📊 Статистика и прогресс\n\n"
+            "Нажмите «🌟 ТЕХНИКА НА СЕГОДНЯ» чтобы начать!"
+        )
+        
+        try:
+            bot.send_message(user_id, notification_text, parse_mode='Markdown', reply_markup=main_menu_keyboard)
+        except:
+            # Упрощенная версия без Markdown
+            simple_text = (
+                "🎉 ПОДПИСКА АКТИВИРОВАНА!\n\n"
+                f"✅ Ваша подписка успешно активирована!\n"
+                f"📅 Дней доступа: {days_left}\n"
+            )
             if subscription_end:
-                notification_text += f"🏁 Действует до: {subscription_end.strftime('%d.%m.%Y')}\n\n"
-            
-            notification_text += (
+                simple_text += f"🏁 Действует до: {subscription_end.strftime('%d.%m.%Y')}\n\n"
+            simple_text += (
                 "✨ Теперь вам доступны:\n"
-                "• 🌟 Техника на каждый день\n"
-                "• 📚 Полная библиотека техник\n"
-                "• 📊 Статистика и прогресс\n\n"
+                "• Техника на каждый день\n"
+                "• Полная библиотека техник\n"
+                "• Статистика и прогресс\n\n"
                 "Нажмите «🌟 ТЕХНИКА НА СЕГОДНЯ» чтобы начать!"
             )
-            
-            try:
-                bot.send_message(user_id, notification_text, parse_mode='Markdown', reply_markup=main_menu_keyboard)
-            except:
-                # Упрощенная версия без Markdown
-                simple_text = (
-                    "🎉 ПОДПИСКА АКТИВИРОВАНА!\n\n"
-                    f"✅ Ваша подписка успешно активирована!\n"
-                    f"📅 Дней доступа: {days_left}\n"
-                )
-                if subscription_end:
-                    simple_text += f"🏁 Действует до: {subscription_end.strftime('%d.%m.%Y')}\n\n"
-                simple_text += (
-                    "✨ Теперь вам доступны:\n"
-                    "• Техника на каждый день\n"
-                    "• Полная библиотека техник\n"
-                    "• Статистика и прогресс\n\n"
-                    "Нажмите «🌟 ТЕХНИКА НА СЕГОДНЯ» чтобы начать!"
-                )
-                bot.send_message(user_id, simple_text, reply_markup=main_menu_keyboard)
+            bot.send_message(user_id, simple_text, reply_markup=main_menu_keyboard)
             
             logger.info(f"✅ Подписка активирована для user_id={user_id}, дней={period_days}")
             return True
