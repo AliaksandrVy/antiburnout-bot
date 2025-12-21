@@ -472,31 +472,34 @@ def activate_subscription_with_notification(user_id, period_days, payment_id=Non
             "Нажмите «🌟 ТЕХНИКА НА СЕГОДНЯ» чтобы начать!"
         )
         
+        # Пытаемся отправить уведомление (не критично, если не получится)
         try:
             bot.send_message(user_id, notification_text, parse_mode='Markdown', reply_markup=main_menu_keyboard)
-        except:
+        except Exception as e:
             # Упрощенная версия без Markdown
-            simple_text = (
-                "🎉 ПОДПИСКА АКТИВИРОВАНА!\n\n"
-                f"✅ Ваша подписка успешно активирована!\n"
-                f"📅 Дней доступа: {days_left}\n"
-            )
-            if subscription_end:
-                simple_text += f"🏁 Действует до: {subscription_end.strftime('%d.%m.%Y')}\n\n"
-            simple_text += (
-                "✨ Теперь вам доступны:\n"
-                "• Техника на каждый день\n"
-                "• Полная библиотека техник\n"
-                "• Статистика и прогресс\n\n"
-                "Нажмите «🌟 ТЕХНИКА НА СЕГОДНЯ» чтобы начать!"
-            )
-            bot.send_message(user_id, simple_text, reply_markup=main_menu_keyboard)
-            
-            logger.info(f"✅ Подписка активирована для user_id={user_id}, дней={period_days}")
-            return True
-        else:
-            logger.error(f"❌ Не удалось активировать подписку для user_id={user_id}")
-            return False
+            logger.warning(f"Не удалось отправить Markdown сообщение пользователю {user_id}, пробую простой текст: {e}")
+            try:
+                simple_text = (
+                    "🎉 ПОДПИСКА АКТИВИРОВАНА!\n\n"
+                    f"✅ Ваша подписка успешно активирована!\n"
+                    f"📅 Дней доступа: {days_left}\n"
+                )
+                if subscription_end:
+                    simple_text += f"🏁 Действует до: {subscription_end.strftime('%d.%m.%Y')}\n\n"
+                simple_text += (
+                    "✨ Теперь вам доступны:\n"
+                    "• Техника на каждый день\n"
+                    "• Полная библиотека техник\n"
+                    "• Статистика и прогресс\n\n"
+                    "Нажмите «🌟 ТЕХНИКА НА СЕГОДНЯ» чтобы начать!"
+                )
+                bot.send_message(user_id, simple_text, reply_markup=main_menu_keyboard)
+            except Exception as e2:
+                logger.warning(f"Не удалось отправить уведомление пользователю {user_id}: {e2}")
+                # Подписка активирована, но уведомление не отправлено - это не критично
+        
+        logger.info(f"✅ Подписка активирована для user_id={user_id}, дней={period_days}")
+        return True
     except Exception as e:
         logger.error(f"Ошибка активации подписки с уведомлением: {e}")
         return False
@@ -1219,45 +1222,71 @@ def fix_subscription_command(message):
         current_status = check_subscription_in_db(user_id)
         subscription_end, days_left = get_subscription_info(user_id)
         
-        # Активируем подписку
-        if activate_subscription_with_notification(user_id, days):
-            # Проверяем результат
-            new_status = check_subscription_in_db(user_id)
-            new_subscription_end, new_days_left = get_subscription_info(user_id)
-            
-            response = (
-                f"✅ *ПОДПИСКА ИСПРАВЛЕНА*\n\n"
+        # Активируем подписку напрямую в БД
+        if not add_subscription_to_db(user_id, days):
+            error_msg = (
+                f"❌ *ОШИБКА АКТИВАЦИИ ПОДПИСКИ*\n\n"
                 f"👤 User ID: {user_id}\n"
                 f"📅 Период: {days} дней\n\n"
-                f"*До исправления:*\n"
-                f"Статус: {'✅ Активна' if current_status else '❌ Не активна'}\n"
+                f"Не удалось сохранить подписку в базу данных.\n"
+                f"Проверьте логи для подробностей."
             )
-            
-            if subscription_end:
-                response += f"Действует до: {subscription_end.strftime('%d.%m.%Y')}\n"
-                response += f"Дней осталось: {days_left}\n"
-            
-            response += (
-                f"\n*После исправления:*\n"
-                f"Статус: {'✅ Активна' if new_status else '❌ Не активна'}\n"
-            )
-            
-            if new_subscription_end:
-                response += f"Действует до: {new_subscription_end.strftime('%d.%m.%Y')}\n"
-                response += f"Дней осталось: {new_days_left}\n"
-            
-            if not new_status:
-                response += "\n⚠️ ВНИМАНИЕ: Подписка все еще не активна! Возможна проблема с БД."
-            
             try:
-                bot.send_message(message.chat.id, response, parse_mode='Markdown')
+                bot.send_message(message.chat.id, error_msg, parse_mode='Markdown')
             except:
-                bot.send_message(message.chat.id, response.replace('*', ''))
+                bot.send_message(message.chat.id, error_msg.replace('*', ''))
+            return
+        
+        # Небольшая задержка для гарантии записи в БД
+        import time
+        time.sleep(0.2)
+        
+        # Проверяем результат
+        new_status = check_subscription_in_db(user_id)
+        new_subscription_end, new_days_left = get_subscription_info(user_id)
+        
+        # Пытаемся отправить уведомление пользователю (не критично)
+        notification_sent = False
+        try:
+            if activate_subscription_with_notification(user_id, days):
+                notification_sent = True
+        except Exception as e:
+            logger.warning(f"Не удалось отправить уведомление пользователю {user_id}: {e}")
+        
+        # Формируем ответ
+        response = (
+            f"✅ *ПОДПИСКА ИСПРАВЛЕНА*\n\n"
+            f"👤 User ID: {user_id}\n"
+            f"📅 Период: {days} дней\n\n"
+            f"*До исправления:*\n"
+            f"Статус: {'✅ Активна' if current_status else '❌ Не активна'}\n"
+        )
+        
+        if subscription_end:
+            response += f"Действует до: {subscription_end.strftime('%d.%m.%Y')}\n"
+            response += f"Дней осталось: {days_left}\n"
+        
+        response += (
+            f"\n*После исправления:*\n"
+            f"Статус: {'✅ Активна' if new_status else '❌ Не активна'}\n"
+        )
+        
+        if new_subscription_end:
+            response += f"Действует до: {new_subscription_end.strftime('%d.%m.%Y')}\n"
+            response += f"Дней осталось: {new_days_left}\n"
+        
+        if notification_sent:
+            response += f"\n📨 Уведомление отправлено пользователю"
         else:
-            bot.send_message(
-                message.chat.id,
-                f"❌ Не удалось исправить подписку для user_id={user_id}"
-            )
+            response += f"\n⚠️ Уведомление не отправлено (пользователь может быть не найден в боте)"
+        
+        if not new_status:
+            response += "\n\n⚠️ ВНИМАНИЕ: Подписка все еще не активна! Возможна проблема с БД."
+        
+        try:
+            bot.send_message(message.chat.id, response, parse_mode='Markdown')
+        except:
+            bot.send_message(message.chat.id, response.replace('*', ''))
             
     except ValueError:
         bot.send_message(message.chat.id, "❌ Ошибка формата. user_id и days должны быть числами.")
