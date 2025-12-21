@@ -231,33 +231,39 @@ def update_payment_status(payment_id, status):
         conn.close()
 
 # ============== ЗАГРУЗКА ТЕХНИК ==============
+techniques_list = []
+techniques_by_type = {}
+
 try:
     with open('techniques.json', 'r', encoding='utf-8') as f:
-        techniques = json.load(f)
-    logger.info(f"✅ Загружено {len(techniques)} категорий техник")
-except:
-    logger.error("❌ Файл techniques.json не найден! Создаю демо-данные...")
-    techniques = {
-        "Дыхательные практики": [
+        data = json.load(f)
+        # Обрабатываем новую структуру JSON
+        if 'techniques' in data:
+            techniques_list = data['techniques']
+            # Группируем по типам для удобства
+            for tech in techniques_list:
+                tech_type = tech.get('type', 'другое')
+                if tech_type not in techniques_by_type:
+                    techniques_by_type[tech_type] = []
+                techniques_by_type[tech_type].append(tech)
+        else:
+            # Старая структура (словарь категорий)
+            techniques_by_type = data
+            for category, techs in data.items():
+                techniques_list.extend(techs)
+    
+    logger.info(f"✅ Загружено {len(techniques_list)} техник из {len(techniques_by_type)} категорий")
+except Exception as e:
+    logger.error(f"❌ Ошибка загрузки techniques.json: {e}")
+    techniques_list = []
+    techniques_by_type = {
+        "дыхание": [
             {
                 "name": "Дыхание 4-7-8",
                 "description": "Вдох на 4 счета, задержка на 7, выдох на 8.",
-                "time": "5 минут",
+                "type": "дыхание",
+                "steps": ["Вдох на 4", "Задержка на 7", "Выдох на 8"],
                 "tip": "Делайте утром для спокойного дня."
-            },
-            {
-                "name": "Диафрагмальное дыхание",
-                "description": "Дышите животом, медленно и глубоко.",
-                "time": "3-5 минут",
-                "tip": "Положите руку на живот для контроля."
-            }
-        ],
-        "Медитации": [
-            {
-                "name": "Медитация осознанности",
-                "description": "Сосредоточьтесь на дыхании, наблюдайте мысли без оценки.",
-                "time": "10 минут",
-                "tip": "Начинайте с 3-5 минут и увеличивайте постепенно."
             }
         ]
     }
@@ -283,6 +289,19 @@ tariff_keyboard.add(
 
 back_keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
 back_keyboard.row("🔙 НАЗАД В ГЛАВНОЕ МЕНЮ")
+
+# Клавиатура для выбора типа техники
+technique_type_keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+technique_type_keyboard.row("🫁 Дыхание", "💪 Упражнение", "🧠 Фокус")
+technique_type_keyboard.row("🎲 Случайная техника")
+technique_type_keyboard.row("🔙 НАЗАД В ГЛАВНОЕ МЕНЮ")
+
+# Клавиатура для выбора состояния
+state_keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+state_keyboard.row("😰 Стресс/Тревога", "😴 Усталость")
+state_keyboard.row("😤 Раздражение", "😵 Перегрузка")
+state_keyboard.row("🎯 Нужна концентрация", "🎲 Просто техника")
+state_keyboard.row("🔙 НАЗАД В ГЛАВНОЕ МЕНЮ")
 
 # ============== ОБРАБОТЧИКИ ==============
 @bot.message_handler(commands=['start'])
@@ -349,7 +368,7 @@ def send_help(message):
 
 @bot.message_handler(func=lambda message: message.text == "🌟 ТЕХНИКА НА СЕГОДНЯ")
 def daily_technique(message):
-    """Техника на сегодня"""
+    """Техника на сегодня - выбор типа"""
     user_id = message.from_user.id
     
     if not check_subscription_in_db(user_id):
@@ -379,28 +398,110 @@ def daily_technique(message):
                            reply_markup=main_menu_keyboard)
         return
     
-    # Если подписка есть
-    if techniques:
-        category = random.choice(list(techniques.keys()))
-        technique = random.choice(techniques[category])
-        
-        response = (
-            f"🌟 *ТЕХНИКА НА СЕГОДНЯ*\n\n"
-            f"📁 *Категория:* {category}\n"
-            f"🎯 *Название:* {technique['name']}\n\n"
-            f"📝 *Описание:*\n{technique['description']}\n\n"
-            f"⏱ *Время:* {technique.get('time', '5-10 минут')}\n\n"
-            f"💡 *Совет:* {technique.get('tip', 'Выполняйте осознанно.')}"
-        )
+    # Спрашиваем, какую технику выбрать
+    response = (
+        "🌟 *ЧТО ВАМ НУЖНО СЕЙЧАС?*\n\n"
+        "Выберите тип техники или ваше состояние:\n\n"
+        "🫁 *Дыхание* - для успокоения и расслабления\n"
+        "💪 *Упражнение* - для снятия физического напряжения\n"
+        "🧠 *Фокус* - для концентрации и ментального баланса\n"
+        "🎲 *Случайная* - доверьтесь выбору бота"
+    )
+    
+    try:
+        bot.send_message(message.chat.id, response, reply_markup=technique_type_keyboard, parse_mode='Markdown')
+    except:
+        bot.send_message(message.chat.id,
+                        "🌟 ЧТО ВАМ НУЖНО СЕЙЧАС?\n\n"
+                        "Выберите тип техники:\n\n"
+                        "🫁 Дыхание - для успокоения\n"
+                        "💪 Упражнение - для снятия напряжения\n"
+                        "🧠 Фокус - для концентрации\n"
+                        "🎲 Случайная - доверьтесь выбору бота",
+                        reply_markup=technique_type_keyboard)
+
+def send_technique(message, tech_type=None):
+    """Отправка техники пользователю"""
+    if not techniques_list:
+        bot.send_message(message.chat.id, "📚 Техники временно недоступны. Мы работаем над этим!", reply_markup=back_keyboard)
+        return
+    
+    # Выбираем технику
+    if tech_type:
+        # Фильтруем по типу
+        filtered_techniques = [t for t in techniques_list if t.get('type') == tech_type]
+        if filtered_techniques:
+            technique = random.choice(filtered_techniques)
+        else:
+            technique = random.choice(techniques_list)
     else:
-        response = "📚 Техники временно недоступны. Мы работаем над этим!"
+        # Случайная техника
+        technique = random.choice(techniques_list)
+    
+    tech_type = technique.get('type', 'другое')
+    
+    # Формируем название категории
+    type_names = {
+        'дыхание': '🫁 Дыхательные практики',
+        'упражнение': '💪 Физические упражнения',
+        'фокус': '🧠 Ментальные техники'
+    }
+    category_name = type_names.get(tech_type, f'📚 {tech_type.capitalize()}')
+    
+    # Формируем шаги
+    steps_text = ""
+    if 'steps' in technique and technique['steps']:
+        steps_text = "\n\n📋 *Шаги выполнения:*\n"
+        for i, step in enumerate(technique['steps'], 1):
+            steps_text += f"{i}. {step}\n"
+    
+    response = (
+        f"🌟 *ТЕХНИКА НА СЕГОДНЯ*\n\n"
+        f"📁 *Категория:* {category_name}\n"
+        f"🎯 *Название:* {technique['name']}\n\n"
+        f"📝 *Описание:*\n{technique['description']}"
+        f"{steps_text}\n"
+        f"💡 *Совет:* {technique.get('tip', 'Выполняйте осознанно.')}"
+    )
     
     try:
         bot.send_message(message.chat.id, response, reply_markup=back_keyboard, parse_mode='Markdown')
     except:
-        bot.send_message(message.chat.id, 
-                        f"ТЕХНИКА НА СЕГОДНЯ\n\nКатегория: {category}\nНазвание: {technique['name']}\n\nОписание:\n{technique['description']}\n\nВремя: {technique.get('time', '5-10 минут')}\n\nСовет: {technique.get('tip', 'Выполняйте осознанно.')}",
-                        reply_markup=back_keyboard)
+        # Упрощенная версия без Markdown
+        steps_text = ""
+        if 'steps' in technique and technique['steps']:
+            steps_text = "\n\n📋 Шаги выполнения:\n"
+            for i, step in enumerate(technique['steps'], 1):
+                steps_text += f"{i}. {step}\n"
+        
+        simple_response = (
+            f"🌟 ТЕХНИКА НА СЕГОДНЯ\n\n"
+            f"📁 Категория: {category_name}\n"
+            f"🎯 Название: {technique['name']}\n\n"
+            f"📝 Описание:\n{technique['description']}"
+            f"{steps_text}\n"
+            f"💡 Совет: {technique.get('tip', 'Выполняйте осознанно.')}"
+        )
+        bot.send_message(message.chat.id, simple_response, reply_markup=back_keyboard)
+
+@bot.message_handler(func=lambda message: message.text in ["🫁 Дыхание", "💪 Упражнение", "🧠 Фокус", "🎲 Случайная техника"])
+def choose_technique_type(message):
+    """Обработка выбора типа техники"""
+    user_id = message.from_user.id
+    
+    if not check_subscription_in_db(user_id):
+        bot.send_message(message.chat.id, "🔒 Эта функция доступна только по подписке!", reply_markup=main_menu_keyboard)
+        return
+    
+    type_map = {
+        "🫁 Дыхание": "дыхание",
+        "💪 Упражнение": "упражнение",
+        "🧠 Фокус": "фокус",
+        "🎲 Случайная техника": None
+    }
+    
+    tech_type = type_map.get(message.text)
+    send_technique(message, tech_type)
 
 @bot.message_handler(func=lambda message: message.text == "💰 ПОДПИСКА")
 def subscription_menu(message):
