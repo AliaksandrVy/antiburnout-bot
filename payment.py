@@ -4,7 +4,7 @@ import uuid
 import os
 from dotenv import load_dotenv
 
-# ЯВНО загружаем .env
+# Загружаем переменные окружения
 load_dotenv()
 
 # ДЕБАГ: проверим, загрузились ли переменные
@@ -54,9 +54,53 @@ def create_payment(user_id, amount, description, return_url="https://t.me"):
     return payment_id, payment_url
 
 def check_payment(payment_id):
-    """Проверяет статус платежа"""
+    """Проверяет статус платежа (простая версия)"""
     try:
         payment = Payment.find_one(payment_id)
         return payment.status  # pending, waiting_for_capture, succeeded, canceled
-    except:
+    except Exception as e:
+        print(f"Ошибка при проверке платежа {payment_id}: {e}")
         return "unknown"
+
+def check_payment_with_details(payment_id):
+    """
+    Проверяет статус платежа с деталями
+    Возвращает словарь с полной информацией
+    """
+    try:
+        payment = Payment.find_one(payment_id)
+        
+        result = {
+            'status': payment.status,
+            'payment_id': payment.id,
+            'paid': getattr(payment, 'paid', False),
+            'cancellation_reason': getattr(payment, 'cancellation_details', {}).get('reason', ''),
+            'created_at': getattr(payment, 'created_at', None),
+            'expires_at': getattr(payment, 'expires_at', None)
+        }
+        
+        # Добавляем сумму, если есть
+        if hasattr(payment, 'amount'):
+            result['amount'] = payment.amount.value
+            result['currency'] = payment.amount.currency
+        
+        # Добавляем описание, если есть
+        if hasattr(payment, 'description'):
+            result['description'] = payment.description
+        
+        # Добавляем метаданные, если есть
+        if hasattr(payment, 'metadata'):
+            result['metadata'] = payment.metadata
+        
+        # Добавляем способ оплаты, если есть
+        if hasattr(payment, 'payment_method'):
+            result['payment_method'] = payment.payment_method.type
+        
+        return result
+        
+    except Exception as e:
+        return {
+            'status': 'error',
+            'error': str(e),
+            'payment_id': payment_id
+        }

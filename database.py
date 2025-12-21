@@ -134,3 +134,54 @@ def update_payment(payment_id, status):
     db = Database()
     db.update_payment_status(payment_id, status)
     return True
+
+# НОВЫЕ ФУНКЦИИ ДЛЯ АВТОПОДПИСКИ
+def get_recent_payments(minutes=5):
+    """
+    Возвращает платежи за последние N минут
+    Используется для проверки свежих платежей
+    """
+    conn = sqlite3.connect('users.db', check_same_thread=False)
+    cursor = conn.cursor()
+    
+    # Получаем платежи созданные не позднее N минут назад
+    cursor.execute('''
+        SELECT payment_id, user_id, amount, period_days 
+        FROM payments 
+        WHERE status = 'pending' 
+        AND datetime(created_at) > datetime('now', ?)
+    ''', (f'-{minutes} minutes',))
+    
+    payments = []
+    for row in cursor.fetchall():
+        payments.append({
+            'payment_id': row[0],
+            'user_id': row[1],
+            'amount': row[2],
+            'period_days': row[3]
+        })
+    
+    conn.close()
+    return payments
+
+def get_user_by_id(user_id):
+    """Получает данные пользователя по ID"""
+    conn = sqlite3.connect('users.db', check_same_thread=False)
+    cursor = conn.cursor()
+    
+    cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
+    result = cursor.fetchone()
+    
+    conn.close()
+    return result
+
+def get_payment_by_id(payment_id):
+    """Получает данные платежа по ID"""
+    conn = sqlite3.connect('users.db', check_same_thread=False)
+    cursor = conn.cursor()
+    
+    cursor.execute('SELECT * FROM payments WHERE payment_id = ?', (payment_id,))
+    result = cursor.fetchone()
+    
+    conn.close()
+    return result
