@@ -507,6 +507,7 @@ def send_help(message):
             "\n👨‍💼 *Админ-команды:*\n"
             "• /admin - Панель администратора\n"
             "• /all_payments - Все платежи в БД\n"
+            "• /find_payments [days] - Найти платежи в ЮКассе\n"
             "• /activate_payments - Активировать pending платежи\n"
             "• /activate_by_id <payment_id> - Активировать по ID из ЮКассы\n"
             "• /test_payment - Тестовая активация подписки\n"
@@ -1198,6 +1199,123 @@ def activate_pending_payments_command(message):
             
     except Exception as e:
         logger.error(f"Критическая ошибка в activate_pending_payments_command: {e}")
+        bot.send_message(message.chat.id, f"❌ Произошла ошибка: {str(e)}")
+
+@bot.message_handler(commands=['find_payments'])
+def find_payments_from_yookassa_command(message):
+    """Поиск успешных платежей в ЮКассе за последние дни (только для админа)
+    
+    Использование: /find_payments [days]
+    Пример: /find_payments 7
+    """
+    if str(message.from_user.id) != ADMIN_ID:
+        bot.send_message(message.chat.id, "❌ Доступ запрещен. Эта команда только для администратора.")
+        return
+    
+    try:
+        # Парсим команду
+        parts = message.text.split()
+        days = int(parts[1]) if len(parts) > 1 else 7
+        
+        bot.send_message(
+            message.chat.id,
+            f"🔍 Ищу успешные платежи в ЮКассе за последние {days} дней...\nПожалуйста, подождите."
+        )
+        
+        try:
+            from payment import get_payments_by_date_range
+            payments = get_payments_by_date_range(days)
+            
+            if not payments:
+                bot.send_message(
+                    message.chat.id,
+                    f"❌ Не удалось получить список платежей из ЮКассы.\n\n"
+                    f"Возможные причины:\n"
+                    f"• API ЮКассы не поддерживает получение списка платежей\n"
+                    f"• Проблемы с подключением\n\n"
+                    f"💡 Используйте команду /activate_by_id с payment_id из личного кабинета ЮКассы."
+                )
+                return
+            
+            # Фильтруем только успешные платежи
+            succeeded_payments = [p for p in payments if p.get('status') == 'succeeded']
+            
+            if not succeeded_payments:
+                bot.send_message(
+                    message.chat.id,
+                    f"✅ Найдено {len(payments)} платежей за последние {days} дней,\n"
+                    f"но нет успешных платежей."
+                )
+                return
+            
+            # Проверяем, какие из них есть в БД
+            db_payments = get_all_payments()
+            db_payment_ids = {p[0] for p in db_payments}
+            
+            missing_payments = []
+            for payment in succeeded_payments:
+                payment_id = payment.get('id')
+                if payment_id and payment_id not in db_payment_ids:
+                    missing_payments.append(payment)
+            
+            if not missing_payments:
+                response = (
+                    f"✅ Найдено {len(succeeded_payments)} успешных платежей.\n"
+                    f"Все они уже есть в базе данных."
+                )
+            else:
+                response = (
+                    f"🔍 *НАЙДЕНО ПРОПУЩЕННЫХ ПЛАТЕЖЕЙ:*\n\n"
+                    f"Всего успешных: {len(succeeded_payments)}\n"
+                    f"Пропущенных: {len(missing_payments)}\n\n"
+                    f"*Список пропущенных:*\n\n"
+                )
+                
+                for i, payment in enumerate(missing_payments[:10], 1):
+                    payment_id = payment.get('id', 'N/A')
+                    amount = payment.get('amount', 'N/A')
+                    created_at = payment.get('created_at', 'N/A')
+                    metadata = payment.get('metadata', {})
+                    user_id = metadata.get('user_id', 'не указан')
+                    
+                    response += (
+                        f"{i}. {payment_id[:20]}...\n"
+                        f"   👤 User ID: {user_id}\n"
+                        f"   💰 Сумма: {amount}₽\n"
+                        f"   📅 Дата: {created_at}\n\n"
+                    )
+                
+                if len(missing_payments) > 10:
+                    response += f"\n... и еще {len(missing_payments) - 10} платежей"
+                
+                response += (
+                    f"\n\n💡 *Для активации используйте:*\n"
+                    f"/activate_by_id <payment_id>"
+                )
+            
+            try:
+                bot.send_message(message.chat.id, response, parse_mode='Markdown')
+            except:
+                bot.send_message(message.chat.id, response.replace('*', ''))
+                
+        except ImportError:
+            bot.send_message(
+                message.chat.id,
+                "❌ Модуль payment не найден или функция get_payments_by_date_range не реализована.\n\n"
+                "💡 Используйте команду /activate_by_id с payment_id из личного кабинета ЮКассы."
+            )
+        except Exception as e:
+            logger.error(f"Ошибка в find_payments_from_yookassa_command: {e}")
+            bot.send_message(
+                message.chat.id,
+                f"❌ Ошибка: {str(e)}\n\n"
+                f"💡 Используйте команду /activate_by_id с payment_id из личного кабинета ЮКассы."
+            )
+            
+    except ValueError:
+        bot.send_message(message.chat.id, "❌ Неверный формат. Используйте: /find_payments [days]")
+    except Exception as e:
+        logger.error(f"Ошибка в find_payments_from_yookassa_command: {e}")
         bot.send_message(message.chat.id, f"❌ Произошла ошибка: {str(e)}")
 
 @bot.message_handler(commands=['activate_by_id'])
